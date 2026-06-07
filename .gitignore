@@ -3,3 +3,5 @@ ckpt/
 __pycache__/
 *.pyc
 examples/
+results_eps_trajectory/
+results_xT_opt/
