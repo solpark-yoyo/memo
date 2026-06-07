@@ -24,7 +24,7 @@ MEMO_PROMPTS = {
 }
 
 
-def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio=0.5):
+def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align):
     """Optimize x_T by applying gradient at [init_steps, init_steps+gap_steps, ...]"""
 
     timesteps = list(sd.scheduler.timesteps)
@@ -38,8 +38,23 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
     s_target = timesteps[s_idx]
     alpha_s = sd.alpha(s_target)
 
-    x_T = torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32, requires_grad=True)
+    x_T_init = torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32)
+    x_T = x_T_init.clone().requires_grad_(True)
     optimizer = torch.optim.Adam([x_T], lr=lr)
+
+    # Pre-compute x̂₀_orig (reference trajectory without optimization) at each update step
+    x0_orig_refs = {}
+    with torch.no_grad():
+        zt_ref = x_T_init.to(sd.dtype) * sd.scheduler.init_noise_sigma
+        for step_idx, t in enumerate(timesteps):
+            at = sd.alpha(t)
+            at_prev = sd.alpha(t - sd.skip)
+            noise_uc, noise_c = sd.predict_noise(zt_ref, t, uc, c)
+            eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+            x0_hat = (zt_ref - (1 - at).sqrt() * eps_theta) / at.sqrt()
+            zt_ref = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+            if step_idx in update_indices:
+                x0_orig_refs[step_idx] = x0_hat.detach().clone().float()
 
     total_loss = 0.0
     for ui, t_idx in enumerate(update_indices):
@@ -58,11 +73,16 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
             if step_idx == t_idx:
                 break
 
-        # memo_proxy loss at this step
+        # memo_proxy loss
         x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon.to(sd.dtype)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
         eps_s = noise_uc_s + cfg * (noise_c_s - noise_uc_s)
-        loss = (epsilon.to(sd.dtype) - eps_s).reshape(1, -1).pow(2).sum()
+        loss_memo = (epsilon.to(sd.dtype) - eps_s).reshape(1, -1).pow(2).sum()
+
+        # text alignment loss: keep x̂₀ close to original trajectory
+        loss_align = (x0_hat.float() - x0_orig_refs[t_idx]).reshape(1, -1).pow(2).sum()
+
+        loss = loss_memo + lambda_align * loss_align
 
         loss.backward()
         optimizer.step()
@@ -73,7 +93,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
         torch.cuda.empty_cache()
 
     x_T_opt = x_T.detach().clone()
-    del x_T, optimizer
+    del x_T, optimizer, x0_orig_refs
     torch.cuda.empty_cache()
     return x_T_opt, total_loss
 
@@ -105,6 +125,8 @@ def main():
     p.add_argument("--num_steps", type=int, default=4,
                    help="Number of gradient updates")
     p.add_argument("--base_s_ratio", type=float, default=0.5)
+    p.add_argument("--lambda_align", type=float, default=0.1,
+                   help="Weight for text alignment regularization")
     p.add_argument("--base_seed", type=int, default=42)
     p.add_argument("--num_seeds", type=int, default=8)
     p.add_argument("--model_key", type=str, default=os.path.join(SCRIPT_DIR, "ckpt", "stable-diffusion-v1-5"))
@@ -132,6 +154,7 @@ def main():
                                f"init_steps={args.init_steps}",
                                f"num_steps={args.num_steps}",
                                f"gap_steps={args.gap_steps}",
+                               f"lambda_align={args.lambda_align}",
                                f"lr={args.lr}")
         os.makedirs(cfg_dir, exist_ok=True)
         with open(os.path.join(args.output_dir, folder, "prompt.txt"), "w") as f:
@@ -147,7 +170,8 @@ def main():
             # Phase 1: optimize x_T
             x_T_opt, loss = optimize_xT(sd, uc, c, args.cfg, device,
                                          args.init_steps, args.num_steps,
-                                         args.gap_steps, args.lr, args.base_s_ratio)
+                                         args.gap_steps, args.lr, args.base_s_ratio,
+                                         args.lambda_align)
 
             # Phase 2: DDIM inference
             img = ddim_inference(sd, x_T_opt, uc, c, args.cfg)
