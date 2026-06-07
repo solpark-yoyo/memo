@@ -1,0 +1,24 @@
+# Diffusion / Generative models
+diffusers>=0.30.0
+transformers>=4.44.0
+accelerate>=0.26.0
+
+# HuggingFace ecosystem
+huggingface-hub>=0.13.4
+datasets>=2.11.0
+
+# Metrics & evaluation
+torchmetrics[multimodal]>=1.0.0
+lpips
+pytorch-fid
+scikit-image
+
+# ImageReward + CLIP
+image-reward
+openai-clip
+ftfy
+timm==0.6.13
+fairscale==0.4.13
+
+# Utilities
+blobfile

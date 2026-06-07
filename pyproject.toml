@@ -1,0 +1,23 @@
+[project]
+name = "jepa-sd"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "diffusers>=0.21.0,<0.30.0",
+    "transformers>=4.37.0,<4.44.0",
+    "accelerate>=0.26.0",
+    "huggingface-hub>=0.13.4",
+    "datasets>=2.11.0",
+    "torchmetrics[multimodal]>=1.0.0",
+    "lpips",
+    "pytorch-fid",
+    "scikit-image",
+    "image-reward",
+    "openai-clip",
+    "ftfy",
+    "timm==0.6.13",
+    "fairscale==0.4.13",
+    "blobfile",
+    "mpi4py",
+    "munch",
+]
