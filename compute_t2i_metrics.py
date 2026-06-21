@@ -192,6 +192,17 @@ def main():
     with open(output_file, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
 
+        writer.writerow(["# Config"])
+        writer.writerow(["clip_ckpt", clip_local_path])
+        writer.writerow(["pickscore_ckpt", model_pretrained_name_or_path])
+        writer.writerow(["imagereward_ckpt", _ir_pt])
+        writer.writerow(["fake_data_path", evalfolder])
+        writer.writerow(["prompt_dir", prompt_dir])
+        writer.writerow(["num_prompts", num_prompts])
+        writer.writerow(["num_images_per_prompt", args.num_images_per_prompt])
+        writer.writerow(["total_images_loaded", len(eval_img_path)])
+        writer.writerow([])
+
         if args.cs_only:
             writer.writerow(["filename", "CLIPScore"])
             for idx, img_path in enumerate(eval_img_path):

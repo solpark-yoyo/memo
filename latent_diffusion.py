@@ -3074,6 +3074,7 @@ class BaseDDIM(StableDiffusion):
                null_prompts=[""],
                popt_kwargs=None,
                etc_kwargs=None,
+               callback_fn=None,
                **kwargs):
         """
         Main function that defines each solver.
@@ -3522,7 +3523,16 @@ class BaseDDIM(StableDiffusion):
             # for deterministic case: eta = 0.0
             else:
                 zt = at_prev.sqrt() * z0t + (1-at_prev).sqrt() * noise_pred
-                
+
+            # ---- callback (draw_noisy / draw_tweedie) ----
+            if callback_fn is not None:
+                callback_kwargs = {
+                    'z0t': z0t.detach(),
+                    'zt': zt.detach(),
+                    'decode': self.decode,
+                }
+                callback_kwargs = callback_fn(step, t, callback_kwargs)
+
         if noise_matching_w:
             import os, numpy as np, pandas as pd, matplotlib.pyplot as plt
             save_dir = "./err_logs"

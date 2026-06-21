@@ -50,7 +50,7 @@ if __name__ == "__main__":
     m_type = args.type
     device = torch.device(args.device)
 
-
+    print(f"real_dir: {real_dir}")
     real_dataset = CustomDataset(real_dir, transforms=customtransforms, num_samples=args.num_real)
     real_loader = DataLoader(real_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
 
@@ -98,6 +98,15 @@ if __name__ == "__main__":
     csv_file = os.path.join(output_dir, 'prdc_metrics.csv')
     with open(csv_file, 'w', newline='') as f:
         writer = csv.writer(f)
+        writer.writerow(['# Config'])
+        writer.writerow(['vgg_type', m_type])
+        writer.writerow(['vgg_feat_dim', out_feats])
+        writer.writerow(['real_data_path', real_dir])
+        writer.writerow(['fake_data_path', fake_dir])
+        writer.writerow(['num_real', len(real_embeddings)])
+        writer.writerow(['num_fake', len(fake_embeddings)])
+        writer.writerow(['nearest_k', k])
+        writer.writerow([])
         writer.writerow(['Precision', 'Recall', 'Density', 'Coverage'])
         writer.writerow([precision, recall, density, coverage])
 

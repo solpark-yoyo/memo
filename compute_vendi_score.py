@@ -3,7 +3,7 @@ import argparse
 import csv
 from PIL import Image
 
-from vendi_score import image_utils
+import image_utils
 import warnings
 
 def load_images_from_folder(folder_path, num_images_per_prompt):
@@ -74,8 +74,25 @@ def main():
         basedir = os.path.basename(os.path.normpath(eval_dir))
         output_csv = os.path.join(metrics_dir, f"{basedir}_vendi.csv")
 
+    # resolve ckpt path used for feature extraction
+    if args.f_type == 'inception':
+        ckpt_path = image_utils._find_local_ckpt("inception_v3*.pth") or "torchvision(auto-download)"
+    elif args.f_type == 'sscd':
+        ckpt_path = image_utils._find_local_ckpt("sscd*.torchscript.pt") or "auto-download"
+    else:
+        ckpt_path = "none (pixel)"
+    total_images = sum(len(g) for g in grouped_filenames)
+
     with open(output_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
+        writer.writerow(["# Config"])
+        writer.writerow(["f_type", args.f_type])
+        writer.writerow(["ckpt_path", ckpt_path])
+        writer.writerow(["fake_data_path", eval_dir])
+        writer.writerow(["num_images_per_prompt", num_images_per_prompt])
+        writer.writerow(["num_groups", len(grouped_filenames)])
+        writer.writerow(["total_images_loaded", total_images])
+        writer.writerow([])
         writer.writerow(["group_index", "filenames", "VendiScore", "MeanPairwiseSimilarity"])
         for idx, vs_mss in enumerate(vs_mss_list):
             writer.writerow([idx, ";".join(grouped_filenames[idx]), f"{vs_mss[0]:.6f}", f"{vs_mss[1]:.6f}"])

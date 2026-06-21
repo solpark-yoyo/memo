@@ -1,5 +1,6 @@
 workdir/
 ckpt/
+datasets/
 __pycache__/
 *.pyc
 examples/

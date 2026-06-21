@@ -1,4 +1,6 @@
 from matplotlib import pyplot as plt
+import os
+import glob
 import numpy as np
 import torch
 from torch import nn
@@ -10,6 +12,16 @@ import torchvision.transforms.functional as TF
 
 from vendi_score import data_utils, vendi
 from vendi_score.data_utils import Example, Group
+
+
+def _find_local_ckpt(pattern):
+    """ckpt/ 폴더에서 체크포인트를 먼저 찾는다 (없으면 None)."""
+    # 1) 현재 작업 디렉토리 기준
+    candidates = glob.glob(os.path.join(os.getcwd(), "ckpt", pattern))
+    # 2) 이 파일 기준 (ori_memo/image_utils.py → ori_memo/ckpt/)
+    candidates += glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ckpt", pattern))
+    return candidates[0] if candidates else None
+
 
 
 def get_cifar100(root, split="test"):
@@ -61,9 +73,16 @@ def get_mnist(root, split="train", transform=None):
 
 
 def get_inception(pretrained=True, pool=True):
-    model = inception_v3(
-        pretrained=pretrained, transform_input=True,# init_weights=True
-    ).eval()
+    # ckpt/ 우선 참조: 있으면 로컬 파일 로드, 없으면 torchvision 다운로드
+    local_ckpt = _find_local_ckpt("inception_v3*.pth")
+    if local_ckpt is not None:
+        model = inception_v3(weights=None, transform_input=True).eval()
+        state_dict = torch.load(local_ckpt, map_location="cpu")
+        model.load_state_dict(state_dict)
+    else:
+        model = inception_v3(
+            pretrained=pretrained, transform_input=True,# init_weights=True
+        ).eval()
     if pool:
         model.fc = nn.Identity()
     return model
@@ -232,7 +251,13 @@ def get_sscd_embeddings(
 
 
 def get_sscd():
-    model_path = "/home/usb/CFGpp/ckpt/sscd_disc_mixup.torchscript.pt"
+    model_path = _find_local_ckpt("sscd*.torchscript.pt")
+    if model_path is None:
+        raise FileNotFoundError(
+            "SSCD checkpoint not found in ckpt/. "
+            "Download sscd_disc_mixup.torchscript.pt into ckpt/ "
+            "(https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt)"
+        )
     model = torch.jit.load(model_path)
     return model
 
