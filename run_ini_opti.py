@@ -28,11 +28,11 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
     """Optimize x_T by applying gradient at [init_steps, init_steps+gap_steps, ...]"""
 
     timesteps = list(sd.scheduler.timesteps)
-
+    # print(f"timesteps: {len(timesteps)}")
     # update target step indices
     update_indices = [init_steps + i * gap_steps for i in range(num_steps)]
     update_indices = [i for i in update_indices if i < len(timesteps)]
-
+    # print(f"update_indices: {update_indices}")
     # s target for memo_proxy
     s_idx = int(len(timesteps) * base_s_ratio)
     s_target = timesteps[s_idx]
@@ -45,6 +45,8 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
     # Pre-compute x̂₀_orig (reference trajectory without optimization) at each update step
     x0_orig_refs = {}
     with torch.no_grad():
+        # print(f"x_T_init: {x_T_init.shape}")
+        # print(f"sd.scheduler.init_noise_sigma: {sd.scheduler.init_noise_sigma}")
         zt_ref = x_T_init.to(sd.dtype) * sd.scheduler.init_noise_sigma
         for step_idx, t in enumerate(timesteps):
             at = sd.alpha(t)
@@ -63,10 +65,9 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
         # print(f"t_idx: {t_idx}")
         optimizer.zero_grad()
 
-        # ε reference: detached so gradient flows ONLY through the trajectory
-        # (i.e., through ε_s), not through the reference ε term directly.
-        # Without detach, ε = x_T makes the loss self-referential and the
-        # gradient collapses to "move x_T toward ε_s" (trivial minimum ε_s = x_T).
+        # ε reference = 현재 trajectory를 seed하는 초기 noise ε.
+        # eps_trajectory.py:74 의 epsilon_original(=zt) 구조와 동일 —
+        # "trajectory를 만든 noise 자체"를 reference로 쓴다 (fresh gaussian 아님).
         epsilon_ref = x_T.detach()
 
         zt = x_T.to(sd.dtype) * sd.scheduler.init_noise_sigma
@@ -78,25 +79,38 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
             noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
             eps_theta = noise_uc + cfg * (noise_c - noise_uc)
             x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
-            zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+            zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta # DDIM denoising step
             if step_idx == t_idx:
                 _snr_t = (at / (1 - at)).item()
                 print(f"    [tweedie t_idx={t_idx}] alpha_t={at.item():.4f}  SNR={_snr_t:.3f}  "
                       f"(1/sqrt(alpha)={(1/at.sqrt()).item():.2f}x amplification)")
                 break
 
-        # memo_proxy loss (dimension-normalized: MSE over latent elements)
-        # x_s reconstructs the latent at step s from current x0_hat estimate
-        # and the (grad-tracked) x_T noise. Reference ε_ref is held fixed.
-        x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * x_T.to(sd.dtype)
+        # ---- memo proxy (eps_trajectory.py:107,111-116 참조) ----
+        # x_s = √ᾱ_s·x̂₀ + √(1-ᾱ_s)·ε   (ε = x_T.detach() — trajectory 경로로만 gradient 흐름)
+        # eps_trajectory.py:107 과 동일하게 ε를 detach.
+        # x_T.detach() 안 하면 x_s→x_T shortcut gradient 생겨서 trajectory 의미 없어짐.
+        x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * x_T.detach().to(sd.dtype)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
         eps_s = noise_uc_s + cfg * (noise_c_s - noise_uc_s)
-        loss_memo = (epsilon_ref.to(sd.dtype) - eps_s).reshape(1, -1).pow(2).mean() # memorization proxy
-        
-        # text alignment loss: keep x̂₀ close to original trajectory (MSE)
-        loss_align = (x0_hat.float() - x0_orig_refs[t_idx]).reshape(1, -1).pow(2).mean()
+
+        # memo proxy = ||ε - eps_s||² / D, batch-safe (eps_trajectory.py:115-116 과 동일)
+        # reshape(B,-1).pow(2).mean(-1) → 샘플별 (B,) proxy; .mean() 으로 스칼라 loss
+        B = eps_s.shape[0]
+        memo_proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean(-1)  # (B,)
+
+        # 완화 목적: memo_proxy를 MINIMIZE.
+        # 실측(eps_trajectory plot)에서 memorized prompt일수록 proxy가 큼(ε을 무시하고
+        # memorized 방향 eps_s를 뱉기 때문). ∴ proxy↓ = 정상 denoiser(eps_s→ε)로 회귀 = 완화.
+        loss_memo = memo_proxy.mean()   # 스칼라: batch 평균 (최소화 → 완화)
+
+        # text alignment loss: keep x̂₀ close to original trajectory (MSE, batch-safe)
+        loss_align = (x0_hat.float() - x0_orig_refs[t_idx]).reshape(x0_hat.shape[0], -1).pow(2).mean(-1).mean()
+        # print(f"loss_memo: {loss_memo}, loss_align: {loss_align}")
 
         loss = loss_memo + lambda_align * loss_align
+        
+        print(f"memo_proxy(↓=mitigate): {memo_proxy.mean().item():.6f}  loss_memo: {loss_memo.item():.6f}  loss_align: {loss_align.item():.6f}")
 
         loss.backward()
         optimizer.step()
@@ -208,7 +222,9 @@ def main():
                                          args.init_steps, args.num_steps,
                                          args.gap_steps, args.lr, args.base_s_ratio,
                                          args.lambda_align)
-
+            
+            print(f"x_T_opt: {x_T_opt.shape}") # VAE latent : [1,4,64,64]
+            print(f"loss: {loss}")
             # Phase 2: DDIM inference
             img = ddim_inference(sd, x_T_opt, uc, c, args.cfg)
 
