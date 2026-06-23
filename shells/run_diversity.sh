@@ -71,7 +71,7 @@ echo "${ddim_dir}"
 echo "${cno_dir}"
 echo "${init_dir}"
 
-# =========================== 4. [Inference] ===========================
+# # =========================== 4. [Inference] ===========================
 # echo "================== [INFO]: DDIM Inference =================="
 # python -m examples.text_to_mscoco \
 #     ${STD_FLAG} ${ETC_FLAG} --cfg_guidance ${cfg_ddim} ${INF_FLAG} ${DIR_FLAG} \
@@ -83,29 +83,29 @@ echo "${init_dir}"
 #     ${CNO_FLAG} \
 #     --workdir ${cno_dir}
 
-echo "================== [INFO]: init_opti Inference =================="
-python run_ini_opti.py \
-    --NFE ${NFE} --cfg ${cfg_init_opti} --lr ${lr} \
-    --init_steps ${init_steps} --num_steps ${num_opt_steps} --gap_steps ${gap_steps} \
-    --base_s_ratio ${base_s_ratio} --lambda_align ${lambda_align} \
-    --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
-    --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
-    --device cuda:${gpu} --output_dir ${init_dir}
+# echo "================== [INFO]: init_opti Inference =================="
+# python run_ini_opti.py \
+#     --NFE ${NFE} --cfg ${cfg_init_opti} --lr ${lr} \
+#     --init_steps ${init_steps} --num_steps ${num_opt_steps} --gap_steps ${gap_steps} \
+#     --base_s_ratio ${base_s_ratio} --lambda_align ${lambda_align} \
+#     --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
+#     --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
+#     --device cuda:${gpu} --output_dir ${init_dir}
 
-# =========================== 5. [Eval: DDIM] ===========================
+# # =========================== 5. [Eval: DDIM] ===========================
 # echo "================== [INFO]: Eval [DDIM] =================="
 # mkdir -p "${ddim_dir}/logs"
 # python -m compute_t2i_metrics \
 #     --eval_dir ${ddim_dir}/result --prompt_dir ${t2i_prompt_dir} \
-#     --num_prompts $((num_samples * num_images_per_prompt)) --num_images_per_prompt 1 \
+#     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
 #     --output_csv ${ddim_dir}/t2i_metrics.csv \
 #     --device cuda:${gpu} ${CS_FLAG} \
 #     --log_csv ${ddim_dir}/logs/t2i_log.csv --warn_log ${ddim_dir}/logs/t2i_warnings.log
 
 # python -m prdc.prdc_cli \
 #     -r ${prdc_real_dir} -f ${ddim_dir}/result \
-#     -t R -o 64 -b ${num_samples} -d cuda:${gpu} -k ${nearest_k} \
-#     --num_real ${num_samples} --num_fake ${num_samples} \
+#     -t R -o 64 -b $((num_samples * num_images_per_prompt)) -d cuda:${gpu} -k ${nearest_k} \
+#     --num_real 1000 --num_fake $((num_samples * num_images_per_prompt)) \
 #     --log_csv ${ddim_dir}/logs/prdc_log.csv --warn_log ${ddim_dir}/logs/prdc_warnings.log
 
 # python compute_vendi_score.py \
@@ -114,23 +114,23 @@ python run_ini_opti.py \
 #     --f_type ${f_type} \
 #     --output_csv ${ddim_dir}/vendi_metrics.csv
 
-# collect DDIM's t2i+prdc+vendi into one total_metrics.csv
+# # collect DDIM's t2i+prdc+vendi into one total_metrics.csv
 # python merge_benchmark.py --collect_dir ${ddim_dir}
 
-# =========================== 6. [Eval: CNO(InfoNCE)] ===========================
+# # =========================== 6. [Eval: CNO(InfoNCE)] ===========================
 # echo "================== [INFO]: Eval [CNO(InfoNCE)] =================="
 # mkdir -p "${cno_dir}/logs"
 # python -m compute_t2i_metrics \
 #     --eval_dir ${cno_dir}/result --prompt_dir ${t2i_prompt_dir} \
-#     --num_prompts $((num_samples * num_images_per_prompt)) --num_images_per_prompt 1 \
+#     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
 #     --output_csv ${cno_dir}/t2i_metrics.csv \
 #     --device cuda:${gpu} ${CS_FLAG} \
 #     --log_csv ${cno_dir}/logs/t2i_log.csv --warn_log ${cno_dir}/logs/t2i_warnings.log
 
 # python -m prdc.prdc_cli \
 #     -r ${prdc_real_dir} -f ${cno_dir}/result \
-#     -t R -o 64 -b 1 ${num_samples} -d cuda:${gpu} -k ${nearest_k} \
-#     --num_real ${num_samples} --num_fake ${num_samples} \
+#     -t R -o 64 -b $((num_samples * num_images_per_prompt)) -d cuda:${gpu} -k ${nearest_k} \
+#     --num_real 1000 --num_fake $((num_samples * num_images_per_prompt)) \
 #     --log_csv ${cno_dir}/logs/prdc_log.csv --warn_log ${cno_dir}/logs/prdc_warnings.log
 
 # python compute_vendi_score.py \
@@ -139,7 +139,7 @@ python run_ini_opti.py \
 #     --f_type ${f_type} \
 #     --output_csv ${cno_dir}/vendi_metrics.csv
 
-# collect CNO's t2i+prdc+vendi into one total_metrics.csv
+# # collect CNO's t2i+prdc+vendi into one total_metrics.csv
 # python merge_benchmark.py --collect_dir ${cno_dir}
 
 # # =========================== 7. [Eval: init_opti] ===========================
@@ -147,15 +147,15 @@ python run_ini_opti.py \
 # mkdir -p "${init_dir}/logs"
 # python -m compute_t2i_metrics \
 #     --eval_dir ${init_dir}/result --prompt_dir ${t2i_prompt_dir} \
-#     --num_prompts $((num_samples * num_images_per_prompt)) --num_images_per_prompt 1 \
+#     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
 #     --output_csv ${init_dir}/t2i_metrics.csv \
 #     --device cuda:${gpu} ${CS_FLAG} \
 #     --log_csv ${init_dir}/logs/t2i_log.csv --warn_log ${init_dir}/logs/t2i_warnings.log
 
 # python -m prdc.prdc_cli \
 #     -r ${prdc_real_dir} -f ${init_dir}/result \
-#     -t R -o 64 -b ${num_samples} -d cuda:${gpu} -k ${nearest_k} \
-#     --num_real ${num_samples} --num_fake ${num_samples} \
+#     -t R -o 64 -b $((num_samples * num_images_per_prompt)) -d cuda:${gpu} -k ${nearest_k} \
+#     --num_real 1000 --num_fake $((num_samples * num_images_per_prompt)) \
 #     --log_csv ${init_dir}/logs/prdc_log.csv --warn_log ${init_dir}/logs/prdc_warnings.log
 
 # python compute_vendi_score.py \
@@ -164,7 +164,7 @@ python run_ini_opti.py \
 #     --f_type ${f_type} \
 #     --output_csv ${init_dir}/vendi_metrics.csv
 
-# collect init_opti's t2i+prdc+vendi into one total_metrics.csv
+# # collect init_opti's t2i+prdc+vendi into one total_metrics.csv
 # python merge_benchmark.py --collect_dir ${init_dir}
 
 # # =========================== 8. [Merge] ===========================

@@ -27,6 +27,13 @@ MEMO_PROMPTS = {
 def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align):
     """Optimize x_T by applying gradient at [init_steps, init_steps+gap_steps, ...]"""
 
+    # ---- fp32 전환: gradient가 10~19 UNet chain을 생존하도록 ----
+    _orig_dtype = sd.dtype
+    sd.unet.float()
+    sd.dtype = torch.float32
+    uc = uc.float()
+    c = c.float()
+
     timesteps = list(sd.scheduler.timesteps)
     # print(f"timesteps: {len(timesteps)}")
     # update target step indices
@@ -126,6 +133,11 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
     x_T_opt = x_T.detach().clone()
     del x_T, optimizer, x0_orig_refs
     torch.cuda.empty_cache()
+
+    # ---- fp16 복구 ----
+    sd.unet.half()
+    sd.dtype = _orig_dtype
+
     return x_T_opt, total_loss
 
 

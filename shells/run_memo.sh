@@ -30,19 +30,19 @@ infoNCE_temp=0.1
 window_size=16
 gamma=1.0
 
-lambda_align_list=(0.00 0.02 0.04 0.06 0.08 0.10)
-# lr_list=(0.00 0.01 0.03 0.05 0.07)
-for lambda_align in "${lambda_align_list[@]}"; do
+# lambda_align_list=(0.00 0.02 0.04 0.06 0.08 0.10)
+lr_list=(0.00 0.01 0.03 0.05 0.07)
+# for lambda_align in "${lambda_align_list[@]}"; do
 
-# for lr in "${lr_list[@]}"; do
-    echo "==================== lambda_align=${lambda_align} =========================="
+for lr in "${lr_list[@]}"; do
+    echo "==================== lr=${lr} =========================="
     # c. init_opti config
     init_steps=10
     num_opt_steps=4
     gap_steps=3
-    lr=0.00
+    # lr=0.00
     base_s_ratio=0.5
-    lambda_align=0.08
+    lambda_align=0.00
     init_opti_prompt_dir="examples/assets/memorized_prompts_membench.txt"
 
     # d. Eval config
