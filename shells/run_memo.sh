@@ -18,7 +18,7 @@ cfg_ddim=7.5
 cfg_cno=6.0
 cfg_init_opti=7.5
 seed=42
-num_samples=10
+num_samples=20
 num_images_per_prompt=5
 b_size=${num_images_per_prompt}
 text_name="memorized_prompts_membench.txt"
@@ -32,6 +32,7 @@ gamma=1.0
 
 # lambda_align_list=(0.00 0.02 0.04 0.06 0.08 0.10)
 lr_list=(0.00 0.01 0.03 0.05 0.07)
+lr_list=(0.02)
 # for lambda_align in "${lambda_align_list[@]}"; do
 
 for lr in "${lr_list[@]}"; do
@@ -49,6 +50,7 @@ for lr in "${lr_list[@]}"; do
     t2i_prompt_dir="examples/assets/${text_name}"
     f_type="sscd"                                 # ★ memorization → sscd (collapse 측정)
     cs_only=false
+    membench_ref_dir="datasets/membench_ref"       # SSCD-to-GT reference 이미지
 
     # =========================== 2. [FLAG] ===========================
     STD_FLAG="--model ${model} --method ${method} --device cuda:${gpu}"
@@ -113,6 +115,12 @@ for lr in "${lr_list[@]}"; do
     #     --output_csv ${ddim_dir}/t2i_metrics.csv \
     #     --device cuda:${gpu} ${CS_FLAG}
 
+    # python compute_sscd_gt.py \
+    #     --gen_dir ${ddim_dir}/result --ref_dir ${membench_ref_dir} \
+    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+    #     --gpu ${gpu} \
+    #     --output_csv ${ddim_dir}/sscd_gt_metrics.csv
+
     # # collect DDIM's t2i+vendi into one total_metrics.csv
     # python merge_benchmark.py --collect_dir ${ddim_dir}
 
@@ -130,6 +138,12 @@ for lr in "${lr_list[@]}"; do
     #     --output_csv ${cno_dir}/t2i_metrics.csv \
     #     --device cuda:${gpu} ${CS_FLAG}
 
+    # python compute_sscd_gt.py \
+    #     --gen_dir ${cno_dir}/result --ref_dir ${membench_ref_dir} \
+    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+    #     --gpu ${gpu} \
+    #     --output_csv ${cno_dir}/sscd_gt_metrics.csv
+
     # # collect CNO's t2i+vendi into one total_metrics.csv
     # python merge_benchmark.py --collect_dir ${cno_dir}
 
@@ -146,6 +160,12 @@ for lr in "${lr_list[@]}"; do
         --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
         --output_csv ${init_dir}/t2i_metrics.csv \
         --device cuda:${gpu} ${CS_FLAG}
+
+    python compute_sscd_gt.py \
+        --gen_dir ${init_dir}/result --ref_dir ${membench_ref_dir} \
+        --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+        --gpu ${gpu} \
+        --output_csv ${init_dir}/sscd_gt_metrics.csv
 
     # collect init_opti's t2i+vendi into one total_metrics.csv
     python merge_benchmark.py --collect_dir ${init_dir}

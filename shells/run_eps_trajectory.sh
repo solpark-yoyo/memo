@@ -25,7 +25,7 @@ OUTPUT_DIR="${base_dir}/ddim/CFG=${cfg}_NFE=${NFE}/seed=${SEED}/batch=${batch}"
 # ---- Prompt config ----
 num_tp=3          # text prompt 갯수 (coco)
 num_mtp=1         # memorized text prompt 갯수 (membench)
-num_plot=2        # plot00, plot01 ... 각 plot = num_tp text + num_mtp memo
+num_plot=20    # plot00, plot01 ... 각 plot = num_tp text + num_mtp memo
 
 text_dir="examples/assets/coco_v2.txt"
 memo_dir="examples/assets/memorized_prompts_membench.txt"
