@@ -84,10 +84,44 @@ def read_vendi(path):
     return metrics
 
 
+def read_sscd_gt(path):
+    """Read sscd_gt_metrics.csv → {metric: (mean, std)}"""
+    metrics = {}
+    if not os.path.isfile(path):
+        return metrics
+    per_prompt_mean = []
+    per_prompt_max = []
+    with open(path, newline="") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("#") or not line or line.startswith("prompt_idx"):
+                continue
+            parts = line.split(",")
+            if parts[0].isdigit():
+                per_prompt_mean.append(float(parts[2]))
+                per_prompt_max.append(float(parts[3]))
+            elif line.startswith("mean_sscd_to_gt_avg,"):
+                mean_val = line.split(",")[1]
+            elif line.startswith("max_sscd_to_gt_avg,"):
+                max_val = line.split(",")[1]
+            elif line.startswith("memorized_rate"):
+                rp = line.split(",")
+                if len(rp) >= 2:
+                    metrics["Memorized Rate"] = (rp[1], "")
+
+    import numpy as np
+    if per_prompt_mean:
+        mean_str = f"{np.mean(per_prompt_mean):.6f}"
+        std_str = f"{np.std(per_prompt_mean):.6f}"
+        metrics["SSCD-to-GT (mean)"] = (mean_str, std_str)
+    return metrics
+
+
 def collect_metrics(metric_dir):
     """Collect all metrics from a metric directory."""
     result = OrderedDict()
     result.update(read_t2i(os.path.join(metric_dir, "t2i_metrics.csv")))
+    result.update(read_sscd_gt(os.path.join(metric_dir, "sscd_gt_metrics.csv")))
     result.update(read_prdc(os.path.join(metric_dir, "prdc_metrics.csv")))
     result.update(read_vendi(os.path.join(metric_dir, "vendi_metrics.csv")))
     return result
