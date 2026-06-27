@@ -86,7 +86,8 @@ def main():
 
     total_time = t_end - t_start
     per_sample_ms = (total_time / args.num_samples) * 1000 if args.num_samples > 0 else 0
-    peak_vram = max(vram_samples) if vram_samples else -1
+    peak_vram_mb = max(vram_samples) if vram_samples else -1
+    peak_vram_gb = peak_vram_mb / 1024 if peak_vram_mb > 0 else -1
 
     # CSV 저장
     os.makedirs(os.path.dirname(os.path.abspath(args.output_csv)), exist_ok=True)
@@ -96,12 +97,12 @@ def main():
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow(["method", "num_samples", "total_time_sec",
-                             "per_sample_time_ms", "peak_vram_MB"])
+                             "per_sample_time_ms", "peak_vram_GB"])
         writer.writerow([args.method, args.num_samples,
-                         f"{total_time:.2f}", f"{per_sample_ms:.1f}", f"{peak_vram:.0f}"])
+                         f"{total_time:.2f}", f"{per_sample_ms:.1f}", f"{peak_vram_gb:.2f}"])
 
     print(f"[BENCH] {args.method}: total={total_time:.2f}s  "
-          f"per_sample={per_sample_ms:.1f}ms  peak_VRAM={peak_vram:.0f}MB")
+          f"per_sample={per_sample_ms:.1f}ms  peak_VRAM={peak_vram_gb:.2f}GB")
     print(f"[BENCH] saved → {args.output_csv}")
 
     return proc.returncode

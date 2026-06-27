@@ -289,7 +289,8 @@ class StableDiffusion():
             noise_c = noise_uc
         else:
             c_embed = torch.cat([uc, c], dim=0)
-            z_in = torch.cat([zt] * 2) 
+            z_in = torch.cat([zt] * 2)
+            t_in = t_in.expand(zt.shape[0])
             t_in = torch.cat([t_in] * 2)
             noise_pred = self.unet(z_in, t_in, encoder_hidden_states=c_embed)['sample']
             noise_uc, noise_c = noise_pred.chunk(2)

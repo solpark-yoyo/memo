@@ -6,7 +6,7 @@ Example: init_steps=10, num_steps=4, gap_steps=3
   -> gradient at step 10, 13, 16, 19
 """
 
-import sys, os
+import sys, os, csv
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
@@ -68,14 +68,13 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
                 x0_orig_refs[step_idx] = x0_hat.detach().clone().float()
 
     total_loss = 0.0
+    # ε reference = 최적화 전 원본 noise로 고정 (eps_trajectory.py:74 구조와 동일)
+    # 루프 밖에서 한 번만 정의 → 4번의 update 동안 변하지 않음
+    epsilon_ref = x_T_init.detach()
+
     for ui, t_idx in enumerate(update_indices):
         # print(f"t_idx: {t_idx}")
         optimizer.zero_grad()
-
-        # ε reference = 현재 trajectory를 seed하는 초기 noise ε.
-        # eps_trajectory.py:74 의 epsilon_original(=zt) 구조와 동일 —
-        # "trajectory를 만든 noise 자체"를 reference로 쓴다 (fresh gaussian 아님).
-        epsilon_ref = x_T.detach()
 
         zt = x_T.to(sd.dtype) * sd.scheduler.init_noise_sigma
 
@@ -144,7 +143,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
 def optimize_xT_adj(sd, uc, c, cfg, device,
                      init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
                      adjoint_normalize=False, adjoint_fd_fallback=False, fd_eps=1e-3,
-                     cache_latents=True, grad_vanish_threshold=1e-3):
+                     cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1):
     """
     AdjointDPM version of optimize_xT.
 
@@ -214,7 +213,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     s_target = timesteps[s_idx]
     alpha_s = sd.alpha(s_target)
 
-    x_T_init = torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32)
+    x_T_init = torch.randn(batch_size, 4, 64, 64, device=device, dtype=torch.float32)
     x_T = x_T_init.clone().requires_grad_(True)
     optimizer = torch.optim.Adam([x_T], lr=lr)
 
@@ -242,13 +241,11 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     # (B) OPTIMIZATION LOOP — adjoint replaces loss.backward()
     # ================================================================
     total_loss = 0.0
+    # ε reference = 최적화 전 원본 noise로 고정 (4번 update 동안 변하지 않음)
+    epsilon_ref = x_T_init.detach()
+
     for ui, t_idx in enumerate(update_indices):
         optimizer.zero_grad()
-
-        # ε reference = current x_T (detached). Identical semantics to
-        # original line 78. This is the "noise that seeds the trajectory",
-        # NOT a fresh gaussian (mirrors eps_trajectory.py:74).
-        epsilon_ref = x_T.detach()
 
         # ---------- (1) FORWARD: x_T -> x_{t_idx}, NO grad, cache latents --
         # Run the DDIM chain under no_grad. We store only the latent states
@@ -529,6 +526,11 @@ def main():
     args = p.parse_args()
     device = torch.device(args.device)
 
+    # ---- 벤치마크 측정 시작 ----
+    import time
+    torch.cuda.reset_peak_memory_stats()
+    t_start = time.perf_counter()
+
     solver_config = munchify({"num_sampling": args.NFE})
     sd = StableDiffusion(solver_config=solver_config, model_key=args.model_key, device=device, seed=args.base_seed)
     sd.unet.enable_gradient_checkpointing()
@@ -557,32 +559,57 @@ def main():
             f.write(prompt + "\n")
 
     for i, prompt in enumerate(prompts):
-        print(f"\n[{i+1}/{len(prompts)}] \"{prompt}\"")
+        print(f"\n[{i+1}/{len(prompts)}] \"{prompt}\" (batch={args.num_seeds})")
 
+        # text embedding (1회 계산, batch로 복제)
+        uc, c = sd.get_text_embed(null_prompt="", prompt=prompt)
+        uc_batch = uc.repeat(args.num_seeds, 1, 1)
+        c_batch = c.repeat(args.num_seeds, 1, 1)
+
+        # 각 seed마다 다른 초기 noise 생성 (재현성 보장)
+        x_T_init_list = []
         for j in range(args.num_seeds):
             seed = args.base_seed + j * 100
             set_seed(seed)
-            uc, c = sd.get_text_embed(null_prompt="", prompt=prompt)
+            x_T_init_list.append(torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32))
+        x_T_init_batch = torch.cat(x_T_init_list, dim=0)  # (num_seeds, 4, 64, 64)
+        print(f"  x_T batch: {x_T_init_batch.shape}")
 
-            # Phase 1: optimize x_T
-            # print(f"sd: {type(sd)}")
-            # print(f"uc: {uc.shape}")
-            # print(f"c: {c.shape}")
-            x_T_opt, loss = optimize_xT_adj(sd, uc, c, args.cfg, device,
-                                         args.init_steps, args.num_steps,
-                                         args.gap_steps, args.lr, args.base_s_ratio,
-                                         args.lambda_align)
-            
-            print(f"x_T_opt: {x_T_opt.shape}") # VAE latent : [1,4,64,64]
-            print(f"loss: {loss}")
-            # Phase 2: DDIM inference
-            img = ddim_inference(sd, x_T_opt, uc, c, args.cfg)
+        # Phase 1: optimize x_T (batch)
+        x_T_opt_batch, loss = optimize_xT_adj(
+            sd, uc_batch, c_batch, args.cfg, device,
+            args.init_steps, args.num_steps, args.gap_steps, args.lr,
+            args.base_s_ratio, args.lambda_align,
+            batch_size=args.num_seeds,
+        )
+        print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
 
-            # sequential flat naming so VendiScore groups (num_seeds consecutive = 1 prompt)
+        # Phase 2: DDIM inference (batch)
+        img_batch = ddim_inference(sd, x_T_opt_batch, uc_batch, c_batch, args.cfg)
+
+        # save
+        for j in range(args.num_seeds):
             idx = i * args.num_seeds + j
             fname = f"{idx:05d}.png"
-            save_image(img, os.path.join(result_dir, fname))
-            print(f"  prompt={i} seed={seed} loss={loss:.1f} -> result/{fname}")
+            save_image(img_batch[j], os.path.join(result_dir, fname))
+            print(f"  seed={args.base_seed + j * 100} -> result/{fname}")
+
+    # ---- 벤치마크 측정 종료 + comp_metrics.csv 저장 ----
+    t_end = time.perf_counter()
+    total_time = t_end - t_start
+    total_imgs = len(prompts) * args.num_seeds
+    per_sample_ms = (total_time / total_imgs) * 1000 if total_imgs > 0 else 0
+    peak_vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
+
+    comp_dir = os.path.join(args.output_dir, "comp")
+    os.makedirs(comp_dir, exist_ok=True)
+    comp_csv = os.path.join(comp_dir, "comp_metrics.csv")
+    with open(comp_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["method", "num_samples", "total_time_sec", "per_sample_time_ms", "peak_vram_GB"])
+        writer.writerow(["init_opti", total_imgs, f"{total_time:.2f}", f"{per_sample_ms:.1f}", f"{peak_vram_gb:.2f}"])
+    print(f"\n[BENCH] init_opti: total={total_time:.2f}s  per_sample={per_sample_ms:.1f}ms  peak_VRAM={peak_vram_gb:.2f}GB")
+    print(f"[BENCH] saved → {comp_csv}")
 
     print("\nDone.")
 

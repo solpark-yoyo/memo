@@ -30,7 +30,7 @@ infoNCE_temp=0.1
 window_size=16
 gamma=1.0
 
-lr_list=(0.07)
+lr_list=(0.10)
 
 for lr in "${lr_list[@]}"; do
     echo "==================== lr=${lr} =========================="
@@ -81,26 +81,18 @@ for lr in "${lr_list[@]}"; do
     echo "  CNO   → ${cno_dir}"
     echo "  init  → ${init_dir}"
 
-    # =========================== 4. [Inference + Bench] ===========================
+    # =========================== 4. [Inference] (comp 자동 측정) ===========================
     # --- DDIM ---
     # echo "================== [INFO]: DDIM Inference =================="
     # echo "  [CKPT] ${model_key}"
-    # mkdir -p ${ddim_comp}
-    # python bench_inference.py \
-    #     --method DDIM --num_samples ${total_imgs} \
-    #     --output_csv ${ddim_comp}/comp_metrics.csv --gpu ${gpu} -- \
-    #     python -m examples.text_to_mscoco \
+    # python -m examples.text_to_mscoco \
     #     ${STD_FLAG} ${ETC_FLAG} --cfg_guidance ${cfg_ddim} ${INF_FLAG} ${DIR_FLAG} \
     #     --workdir ${ddim_dir}
 
     # --- CNO (infoNCE) ---
     # echo "================== [INFO]: CNO(InfoNCE) Inference =================="
     # echo "  [CKPT] ${model_key}"
-    # mkdir -p ${cno_comp}
-    # python bench_inference.py \
-    #     --method CNO_infoNCE --num_samples ${total_imgs} \
-    #     --output_csv ${cno_comp}/comp_metrics.csv --gpu ${gpu} -- \
-    #     python -m examples.text_to_mscoco \
+    # python -m examples.text_to_mscoco \
     #     ${STD_FLAG} ${ETC_FLAG} --cfg_guidance ${cfg_cno} ${INF_FLAG} ${DIR_FLAG} \
     #     ${CNO_FLAG} \
     #     --workdir ${cno_dir}
@@ -108,11 +100,7 @@ for lr in "${lr_list[@]}"; do
     # --- init_opti ---
     echo "================== [INFO]: init_opti Inference =================="
     echo "  [CKPT] ${model_key}"
-    mkdir -p ${init_comp}
-    python bench_inference.py \
-        --method init_opti --num_samples ${total_imgs} \
-        --output_csv ${init_comp}/comp_metrics.csv --gpu ${gpu} -- \
-        python run_ini_opti.py \
+    python run_ini_opti.py \
         --NFE ${NFE} --cfg ${cfg_init_opti} --lr ${lr} \
         --model_key ${model_key} \
         --init_steps ${init_steps} --num_steps ${num_opt_steps} --gap_steps ${gap_steps} \
