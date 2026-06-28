@@ -30,14 +30,18 @@ infoNCE_temp=0.1
 window_size=16
 gamma=1.0
 
-lr_list=(0.10)
+# lr_list=(0.02 0.04 0.06 0.08)
+# lr_list=(0.02)
+init_steps_list=(10 15 20 15)
 
-for lr in "${lr_list[@]}"; do
-    echo "==================== lr=${lr} =========================="
-    init_steps=10
-    num_opt_steps=4
+# for lr in "${lr_list[@]}"; do
+for init_steps in "${init_steps_list[@]}"; do
+    echo "==================== init_steps=${init_steps} =========================="
+    # init_steps=10
+    num_opt_steps=2
     gap_steps=3
     base_s_ratio=0.5
+    lr=0.08
     lambda_align=0.00
     init_opti_prompt_dir="examples/assets/${text_name}"
 

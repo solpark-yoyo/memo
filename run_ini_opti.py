@@ -143,7 +143,8 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
 def optimize_xT_adj(sd, uc, c, cfg, device,
                      init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
                      adjoint_normalize=False, adjoint_fd_fallback=False, fd_eps=1e-3,
-                     cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1):
+                     cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1,
+                     record_dir=None):
     """
     AdjointDPM version of optimize_xT.
 
@@ -244,6 +245,20 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     # ε reference = 최적화 전 원본 noise로 고정 (4번 update 동안 변하지 않음)
     epsilon_ref = x_T_init.detach()
 
+    # ---- record setup: batch(=seed)별 폴더 + update-step 누적 리스트 ----
+    # 구조: record/img_PPPP/img_PPPP_BB/{grid.png, loss.csv}
+    # grid.png = row(update step 횟수) × col(x_t, x_0|t, x_s)
+    batch_record_imgs = None
+    batch_dirs = None
+    if record_dir is not None:
+        _prompt_tag = os.path.basename(record_dir.rstrip('/'))  # e.g. "img_0000"
+        batch_dirs = []
+        for _b in range(batch_size):
+            _bd = os.path.join(record_dir, f"{_prompt_tag}_{_b:02d}")
+            os.makedirs(_bd, exist_ok=True)
+            batch_dirs.append(_bd)
+        batch_record_imgs = [[] for _ in range(batch_size)]  # per-batch step 누적용
+
     for ui, t_idx in enumerate(update_indices):
         optimizer.zero_grad()
 
@@ -330,6 +345,35 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
             print(f"memo_proxy(↓=mitigate): {memo_proxy.mean().item():.6f}  "
                   f"loss_memo: {loss_memo.item():.6f}  loss_align: {loss_align.item():.6f}")
+
+            # ---- record: 매 update step마다 batch(=seed)별 latent 누적 + loss.csv append ----
+            # 그리드는 loop 종료 후 batch별 1장으로 합침: row=update step(init_opti 횟수), col=(x_t, x_0|t, x_s).
+            if record_dir is not None and batch_dirs is not None:
+                import csv as _csv
+                with torch.no_grad():
+                    _vae_dtype = next(sd.vae.parameters()).dtype   # VAE는 fp16 (UNet만 fp32 강제 중)
+                    def _dec(z):
+                        return (sd.decode(z.detach().to(_vae_dtype)) / 2 + 0.5).clamp(0, 1).cpu()
+                    img_xt  = _dec(x_end)    # x_t  = x_{t_idx} (forward chain 결과)
+                    img_x0t = _dec(x0_hat)   # x_0|t (Tweedie 추정)
+                    img_xs  = _dec(x_s)      # x_s  = √α_s·x0_hat + √(1-α_s)·x_T.detach()
+                    B = img_xt.shape[0]
+                    eps_s_n   = eps_s.detach().reshape(B, -1).norm(dim=-1)
+                    eps_ref_n = epsilon_ref.detach().to(sd.dtype).reshape(B, -1).norm(dim=-1)
+                    for b in range(B):
+                        # 이 update step의 (x_t, x_0|t, x_s) 3개 column을 batch별로 누적
+                        batch_record_imgs[b].extend([img_xt[b], img_x0t[b], img_xs[b]])
+                        # batch별 loss.csv: epsilon_s, epsilon(loss의 ε_ref), loss
+                        _csv_path = os.path.join(batch_dirs[b], "loss.csv")
+                        _wh = not os.path.exists(_csv_path)
+                        with open(_csv_path, "a", newline="") as _f:
+                            _w = _csv.writer(_f)
+                            if _wh:
+                                _w.writerow(["update_step", "t_idx", "eps_s_norm", "eps_ref_norm",
+                                             "memo_proxy", "loss_memo", "loss"])
+                            _w.writerow([ui, t_idx, f"{eps_s_n[b].item():.6f}",
+                                         f"{eps_ref_n[b].item():.6f}", f"{memo_proxy[b].item():.6f}",
+                                         f"{loss_memo.item():.6f}", f"{loss.item():.6f}"])
 
             # Terminal adjoint: ∂L/∂x_{t_idx} via the 2-UNet head (exact autograd).
             g = torch.autograd.grad(loss, x_end, retain_graph=False)[0]
@@ -444,6 +488,15 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
         if xs is not None:
             del xs
         torch.cuda.empty_cache()
+
+    # ---- record: update loop 종료 후 batch(=seed)별 그리드 저장 ----
+    # row = update step(init_opti 횟수), col = (x_t, x_0|t, x_s)
+    if record_dir is not None and batch_record_imgs is not None:
+        from torchvision.utils import make_grid as _make_grid, save_image as _save_image
+        for b in range(len(batch_record_imgs)):
+            if batch_record_imgs[b]:
+                _grid = _make_grid(batch_record_imgs[b], nrow=3)
+                _save_image(_grid, os.path.join(batch_dirs[b], "grid.png"))
 
     x_T_opt = x_T.detach().clone()
     del x_T, optimizer, x0_orig_refs
@@ -576,21 +629,23 @@ def main():
         print(f"  x_T batch: {x_T_init_batch.shape}")
 
         # Phase 1: optimize x_T (batch)
+        record_dir = os.path.join(args.output_dir, "record", f"img_{i:04d}")
+        os.makedirs(record_dir, exist_ok=True)
         x_T_opt_batch, loss = optimize_xT_adj(
             sd, uc_batch, c_batch, args.cfg, device,
             args.init_steps, args.num_steps, args.gap_steps, args.lr,
             args.base_s_ratio, args.lambda_align,
             batch_size=args.num_seeds,
+            record_dir=record_dir,
         )
         print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
 
         # Phase 2: DDIM inference (batch)
         img_batch = ddim_inference(sd, x_T_opt_batch, uc_batch, c_batch, args.cfg)
 
-        # save
+        # save  (init_score_noise 라벨링 표준: img_{prompt:04d}_{sample:02d}.png)
         for j in range(args.num_seeds):
-            idx = i * args.num_seeds + j
-            fname = f"{idx:05d}.png"
+            fname = f"img_{i:04d}_{j:02d}.png"
             save_image(img_batch[j], os.path.join(result_dir, fname))
             print(f"  seed={args.base_seed + j * 100} -> result/{fname}")
 
