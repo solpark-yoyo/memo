@@ -1,0 +1,342 @@
+# 옮기는 과정
+# =============================================================
+# 1. (인터넷) 외부 연구원 컴퓨터 -> (인터넷) 내 로컬 컴퓨터
+scp -r -P 11134 geonsoo@116.112.255.90:/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo .
+# 2. (인터넷) 내 로컬 컴퓨터 -> (인터넷) 소내 메일
+parksol@add.re.kr 파일 첨부 및 전송
+
+# 3. (인터넷) 소내 메일 -> (인터넷 X) 연구소 특별망
+메일 전송 버튼 누르기
+
+# 4. (인터넷 X) 연구소 특별망 -> (인터넷 X) 연구망
+보안하드로 옮기기 물리적으로
+
+# 5. (인터넷 X) 연구망 -> H100 Server
+scp -r <MYFILE> oem@192.168.0.106:/data2/workspace/parksol
+
+# ==========================================================
+
+## 260620 Sat: Diversity 로 밀고 기기
+memorization proxy를 이용해서 initial noise를 optimization을 해서 memorization을 해결하고자 하는 framwork를 만들었다.
+위 framwork를 diversity, memorization 문제로 밀어볼 계획을 세우고 있다. 이때 나는 diversity로 한 번 밀어보는 계획을 세우고 있다.
+
+Diversity 관점: diversity 관련해서 cno를 diversity metric을 이겼다. 하지만 T2I metric이 좋지가 않아서 아쉽다.
+Memorization 관점: Metric을 확인했을 때는 DDIM과 큰 차이가 없고 오히려 score를 loss로 사용해서 initial noise를 Optimization을 하는 framewor가 metric이 더 좋게 나왔다.
+
+그러면 diversity로 밀어보자.
+일단 내가 해봐야 할 것은 num_images_per_prompt=5로 두고 20개 text prompt를 사용해서 100개로 inference를 하고 metric을 비교하는 것이다. (DDIM, CNO, init_opti)
+그 과정에서 예상할 수 있는점은 Diversity Metric은 좋지만(vendi_score, MSS) T2IㅡMetric이 망가지는 것이다.
+Diversity diffusion에서 diversity와 text alignment의 trade-off 관계는 유명하다. 현재 실험이 진행이 되고 있고 한 번 확인해볼 필요성이 있다.
+
+그러면 Memorization 일지를 써보자.
+사실 tweedie domain gap 과 memorization 의 관계성을 실험적으로 확인한 것은 꽤나 독특했다.
+그래서 memorized text prompt의 denoising 과정에서 memorization proxy (|| epslion - epslion_s ||^2) 의 gap 이 커지는 denoising step에서 proxy를 줄이도록 grad를 initial noise를 거는 것이다.
+여기까지만 보면 당연히 memorization metric이 압도적으로 줄어들 줄 알았다. 그러나 실험적으로 막상 memorization metric을 찍었을때는 DDIM과 거의 비슷한 성능을 보여서 실망했다.
+코드에 문제가 있는 건지 확신이 서지 않는다. 그래서 코드를 봐야 될 것 같다.
+
+--- 코드 리뷰 결과 (260620) ---
+3가지 문제 발견 및 반영. 핵심은 (1).
+
+1) gradient self-referential (가장 critical)
+   - epsilon = x_T 여서 loss가 x_T 자기 자신을 참조 → trivial minimum(eps_s = x_T)로 collapse → x_T가 안 바뀜 → DDIM과 동일 결과의 주범.
+   - 반영: epsilon_ref = x_T.detach() 로 reference 고정, gradient는 trajectory(eps_s) 경로로만 흐르도록 수정.
+
+2) lambda_align 이 loss_memo 지배
+   - loss_align(x0-space)이 loss_memo(noise-space)보다 스케일 큼 (로그: align 12 vs memo 2).
+   - 반영: lambda_align 0.1 → 0.07 조정 → memo 가 effective loss에서 우세.
+
+3) proxy 평가 시점 mismatch (부차적)
+   - x0_hat(step 10~19)으로 x_s(step 25) 재구성 → surrogate bias.
+   - 반영: base_s_ratio 튜닝으로 완화 가능 (약 0.3).
+
+[기타] init_dir에 base_s_ratio/lambda_align/batch 추가(설정별 분리 저장), memo/align/|dxT| 디버그 print 추가.
+[검증 필요] detach + lambda_align=0.07 수정 효과는 미확인. 이제 실행 기반 디버깅으로 전환.
+
+(내일 해야할 것) 그러면 내가 내일 해야 될 것은 memorization metric을 확인해야겠네.
+- DDIM, CNO, init_opti 이 3개 memorization metric을 뽑아야겠네.
+- init_score_opti에 맞는 Dockerfile 만들기 (일단)
+- init_score_opti 의 metric을 뽑기
+- DDIM, CNO, init_score_opti, init_opti 이 4개 memorization metric을 비교해야겠네.
+
+돌아가서 look up ahead proxy 제안하기 수학적 설계
+
+# 260621 Sun: Look up ahead Proxy 찾기
+
+Goal: Tweedie domain gap을 감지하는 memorization proxy를 기반으로 denoising step 을 많이 가지 않아도 
+memorized text prompt와 text prompt의 denoising step에서 proxy gap이 커지는 새로운 proxy를 수학적으로 만들고 싶어.
+
+지금 claude_code와 대화 중, 답변 생성 오래걸린다.
+
+그리고 현재 bash shells/run_memo.sh를 실행해서 lossdml grad 경로를 제대로 수정한 코드의 inference를 돌리고 있다.
+
+## Look-up-ahead Proxy 설계 결과 (260621, multi-agent: 6관점 독립설계 → 적대비평 → 통합)
+접근: look-up-ahead proxy를 6개 수학적 관점에서 독립 설계하고, 각각 적대적으로 비평(judge)한 뒤 하나로 통합.
+
+[근본 발견 — early step의 본질적 한계]
+측정된 SD1.5 schedule 기준, update step에서 alpha_t 가 매우 작다:
+  - t_idx=10: alpha_t = 0.0435, SNR = 0.045, Tweedie amplification 1/sqrt(alpha) = 4.80
+  - t_idx=19: alpha_t ≈ 0.16
+즉 x0_hat = (z_t - sqrt(1-alpha_t) eps_theta)/sqrt(alpha_t) 는 eps_theta 오차를 2.5~4.8배 증폭 → noise-scaled garbage.
+그래서 x_s = sqrt(alpha_s) x0_hat + sqrt(1-alpha_s) x_T 가 모든 horizon s 에서 x_T 항에 지배됨.
+→ eps_theta(x_s, s) 가 memorized/normal 모두 near-pure-noise 입력에 대한 동일 smooth 응답 → gap 에 prompt-판별 신호 없음.
+→ baseline(||eps_ref - eps_s||^2) 포함 모든 x0_hat-의존 proxy 가 early 에서 blind.
+   (이게 detach 수정 후에도 metric 이 DDIM 과 비슷할 수 있는 구조적 이유이기도 함.)
+
+[6개 설계 평가 (score / verdict)]
+  [4.0 weak]  CURC — CFG residual r_t = eps_c - eps_uc 기반. x0_hat 독립이라 early 에서 유일하게 살아남음.
+  [3.5 weak]  MTTG — multi-horizon telescoping. early 에서 모든 horizon 이 같은 x_T 를 보는 문제.
+  [3.5 weak]  CSRT — round-trip self-consistency. early 에서 near-identity(trivial) 또는 late(time-mismatch 재발).
+  [3.5 weak]  look-ahead — k-step forward predictor. reference-identity mismatch (gap to x_T != gap to x0_mem).
+  [2.5 reject] Lyapunov — trajectory divergence. early score 가 prior-dominated 라 Jacobian near-identity + fp16 quantization floor.
+  [2.0 reject] Fisher/curvature — JVP differentiability 가 거짓 (codebase JEPA code 가 finite-diff Jv no-grad 로 문서화).
+
+[살아남은 신호: CRELA (CFG-Residual Early-Look-Ahead)]
+유일하게 early 에서 informative 인 것은 CFG residual r = eps_c - eps_uc.
+  - 두 UNet branch 차이 → 큰 shared denoising direction 이 cancel → conditioning pull 만 남아 SNR 높음.
+  - x0_hat 필요 없음 → early step blind 회피.
+  - baseline 이 이미 계산하는 branch 재사용 → 추가 UNet call 0.
+정의: rho_t(x) = mean(r(x,t)^2) / (mean(eps_uc(x,t)^2) + eps_floor)   (relative condition pull)
+  - early term:    M_E    = rho_t(z_t)                 (grad: z_t -> x_T)
+  - late look-ahead (s_idx=25, SNR≈0.43): rho_s = rho_t'(x_s)   (grad: x0_hat, x_T -> x_s)
+  - rho_change = rho_s - M_E.detach()
+  - loss = sign_E * M_E + sign_L * rho_s + 0.3 * rho_change^2 + lambda_align * ||x0_hat - x0_orig||^2
+
+[핵심 주의: sign ambiguity]
+memorized 에서 rho 가 작아지는지(CURC claim: condition-free 재현) vs 커지는지(prompt-conditioned overfit)는 기계적으로 미정.
+→ 5-line diagnostic 이 최우선: memorized vs normal prompt 에서 rho_t, cos(eps_c, eps_uc) 측정 → sign_E, sign_L 결정.
+이 diagnostic 가 sign 를 못 정하면 CRELA 전체 부호가 뒤집힐 수 있음 (비평가가 지적한 CURC killer flaw).
+
+[다음 실험 우선순위 (open questions)]
+1. gating diagnostic: memorized/normal prompt × t_idx∈{10,13,16,19} 에서 rho_t, cos(eps_c, eps_uc) 측정 → sign 결정. 모든 것보다 먼저.
+2. rho_t 가 SNR 변화(0.045→0.19)에 안정적인지, 아니면 per-step normalize 가 필요한지.
+3. x_T 를 rho de-memorizing 방향으로 optimize 했을 때 downstream memorization metric(MSS / pixel similarity) 이 실제 감소하는지 (end-to-end ablation). optimizer 가 rho 만 spoof 하고 진짜 de-memo 를 안 할 수 있음.
+4. late look-ahead rho_s 가 s_idx=25 에서 attractor 를 반영하는지, 더 late(s>30)로 가야 하는지.
+5. fp16 안정성: ratio rho 가 overflow 가능, eps_floor=1e-3 충분한지 (또는 ratio 만 fp32 upcast).
+
+[fallback] CRELA-lite: L = sign_E * M_E + lambda_align * ||x0_hat - x0_orig||^2  (look-ahead/consistency 항 제거, x0_hat 독립 early term 만). 추가 compute 0.
+
+=> 내가 느끼는 문제점은 Tweedie formula의 SNR을 해결이다. 
+사실 tweedie formula를 정리하면 x_0 + (계수)* (noise)의 형태를 나타낸다. 이때 SNR이 너무 낮아버리면 x_0|t에 conditional 정보가 거의 사라진다고 볼 수 있다.
+이때 noise앞에 계수는 alpha_t가 클수록 계수가 낮아진다. 사실 당연한 직관이다. alpha_t(latent에서 clean image의 비중)이 높을 수록 
+그 시점의 latent는 clean image를 많이 포함하고 있다는 것이고 이는 signal을 많이 포함하는 x_0|t를 만들어낼 수 있다. 즉 SNR이 높다.
+그래서 나는 지금 Tweedie formula를 통과할 때마다 alpha_t, SNR, Tweedie formula의 계수 까지 출력하는 코드를 추가했다. 근데 내생각에는ㄴ SNR을 높히려고 
+denoising step을 25이후로 더 나아가서 32 정도를 더 빼서 진행하는 것으로 보인다. (큰단점:OOM 이 너무나 크다다)
+
+
+지금 사실 memorization 코드를 lambda_align을 늘리면서 metric을 봤다. 이론적으로는 T2I metric 좋아지고 memorization metric이 안 좋아지는 구조를 생각했다.
+하지만 metric에서 lambda_align의 증가에 따른 metric을 봤을 때 위 상관관계가 없어보인다. 
+그래서 사실 memorization 코드 구현에 대한 불신이 생겼다. 다시 한 번 코드를 봐야할 것 같다. 
+run_memo.sh의 기준으로 코드를 다시 볼 계획이다.
+
+다시 run_memo.sh를 보는 과정에서 memo_proxy를 코드란에서 계산하는 것을 알게 되었다. 
+.mean(-1) 의 기능을 자세히 알게 되었다. (1,4*64*64)벡터에서 a.mean(-1)을 하게 된다면 4*64*64 axis에 대해서 sum및 dim으로 나눈는 기능을 함으 알았다.
+그래서 내가 의도하는 과정을 수행하는 것을 내가 알았다. 
+
+# 260622 Mon: Memo_loss의 T2I-Memo Trade off 관측 --> loss_memo 의 정상 작동 확인
+
+Q1: 자자 너가 분석을 해줘. 지금 ":/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/workdir/memorization/sd15/init_opti/CFG=7.5_NFE=50/base_s_ratio=0.5_lambda_align=0.00"경로 안에 
+lr를 다르게 한 inference의 metric이 있어. 근데 너가 total_metric.csv을 보면 아는데 
+lr(는 말그대로 memo_proxy를 낮추는 것이기에 Memorization이 해결되야하고, MSS가 증가해야 한다.) 
+근데 오히려 lr을 높히면 높힐 수록 T2I와 MSS(SSCD)가 낮아지는 것을 알 수 있었어. 
+너가 total_metric.csv들을 전부 읽어서 T2I, MSS를 lr에 대해서 눈에 보기 좋게 표로 정리하고 
+코드 구현의 문제라고 가정하고, 코드 구현을 확인해줘. 
+만약 아니라고 느끼면 memorization_proxy자체를 이론적으로 분석해줘. 
+tweedie domain gap과 memorization의 관게성을 result_eps_trajectory에서 확인한 것이니까.
+실험적으로 말고 이론적으로 분석해줘.
+
+A1:  memo_proxy는 loss 구현 문제는 없었다. lr을 늘릴수록 memorization 를 해결했지만 T2I metric이 깨지는 현상을 관측했다.
+좋은 징조다. 코드 구현에 문제가 없다는 것에 반증이다. 그리고 아래에는 lr에 따른 표다.
+
+## lr sweep 결과 (lambda_align=0.00, base_s_ratio=0.5, init=10/nsteps=4/gap=3, seed=42, batch=5)
+
+| lr   | CLIPScore | PickScore | ImageReward | VendiScore↑ | MSS(SSCD)↓=memorization |
+|------|-----------|-----------|-------------|-------------|-------------------------|
+| 0.00 | 32.21     | 18.95     | -0.44       | 3.61        | 0.375                   |
+| 0.01 | 31.94     | 18.88     | -0.56       | 3.83        | 0.310                   |
+| 0.03 | 31.52     | 18.77     | -0.67       | 4.44        | 0.150                   |
+| 0.05 | 31.71     | 18.61     | -0.80       | 4.65        | 0.107                   |
+| 0.07 | 30.20     | 18.25     | -1.09       | 4.75        | 0.086                   |
+
+→ lr↑: MSS↓(memorization 완화 ✅) BUT T2I↓(품질 붕괴 ❌) = fidelity-diversity trade-off
+→ lambda_align=0(무제한)이라 valid 매니폴드 이탈. lambda_align>0로 trade-off 제어 필요.
+
+그래서 lambda_align=0.08로 설정해서 다시 lr에 대해 실험을 돌렸다.
+0.08 선정 이유는 0.10 부터는 marginal한 T2I 감소가 일어났기 때문이다.
+
+# lambda_align Sweep 결과
+## lambda_align sweep (lr=0.01, base_s_ratio=0.5, init=10/nsteps=4/gap=3, seed=42, batch=5)
+
+| lambda_align | CLIPScore | PickScore | ImageReward | VendiScore | MSS(SSCD) |
+|--------------|-----------|-----------|-------------|------------|-----------|
+| 0.00         | 31.94     | 18.88     | -0.56       | 3.83       | 0.310     |
+| 0.02         | 31.92     | 18.90     | -0.54       | 3.74       | 0.336     |
+| 0.04         | 31.68     | 18.93     | -0.50       | 3.78       | 0.318     |
+| 0.06         | 31.73     | 18.81     | -0.56       | 3.78       | 0.321     |
+| 0.08         | 31.68     | 18.87     | -0.51       | 3.71       | 0.330     |
+| 0.10         | 31.71     | 18.95     | -0.49       | 3.82       | 0.313     |
+
+→ 전부 flat (CLIP±0.3, MSS±0.03). lambda_align 0.00~0.10 변화에 metric 거의 안 움직임.
+
+--- 문제점 & 해결 (260622) ---
+
+[문제 1] x_s 재구성 시 x_T shortcut gradient
+  - x_s = √(α_s)·x̂₀ + √(1-α_s)·x_T 에서 x_T가 grad-tracked → x_T→x_s 직접 shortcut 발생
+  - 의도한 gradient: x_T → denoising chain → x̂₀ → x_s → ε_s → loss (trajectory 경로)
+  - 실제: x_T → x_s 직접 shortcut이 trajectory 경로를 무시하고 지배 → 비정상적 x_T 이동 → 이미지 부서짐
+  - 해결: x_s의 x_T를 .detach() → shortcut 제거, gradient가 trajectory 경로로만 흐름 (eps_trajectory.py:107 참조 구조와 정합)
+
+[문제 2] loss_align gradient vanishing → lambda_align flat
+  - loss_align = ||x̂₀(x_T) - x̂₀_orig||² 의 gradient가 10~19 UNet steps (fp16)를 거쳐 x_T에 도달해야 함
+  - 이 긴 chain에서 gradient 소실 → lambda_align이 x_T를 실제로 제어 못 함
+  - loss_memo는 (문제1 수정 전엔) x_s shortcut으로 direct path가 있어 강했음 → 비대칭
+  - 해결 방향: loss_align을 x_T 직접 anchor(||x_T - x_T_init||²)로 변경하면 direct gradient 확보 (TODO)
+
+결국에 문제는 지금까지 init_opti의 grad는 x_s에서 재활용되었던 x_T에 흘러가는 grad였다. 하지만 이는 틀렸다.
+  - 의도한 gradient: x_T → denoising chain → x̂₀ → x_s → ε_s → loss (trajectory 경로)
+의도한 경로로 grad를 흐를 수 있도록 수정을 했으나 gradient vanishing 문제가 발생했다. 그래서 지금은 denoising step을 많이 가져간 x_t에서도
+backprop이 정상적으로 걸릴 수 있을지 시도를 해야 된다.
+
+핵심 문제: x_T --- (Denosing Step) --> x_t 에 있다. UNet을 10번 정도 통과한 x_t에 grad가 x_T까지 흘러들어가려면
+어떤 방법을 사용해야 하는지 난감하다. 
+
+가설 1: 사실 제일 좋은 것은 memo_proxy 기반으로 eárly denoising step 에서 memo_proxy가 memorization
+현상을 감지하는 새로운 proxy를 개발하는 것이 방법이다. 그러면 UNet을 굳이 많이 안 통과해서 proxy가 감지하니 이를 minimize하도록
+grad를 흘릴 수 있다.
+
+
+일단 외부 서버에서 해야 할 일을 정리하자.
+
+< Memorization >
+- 메모라이제이션 테이블 만들기: DDIM + CNO + init_opti (진행 중)
+- 일단 init_score_opti에 맞는 Dockerfile을 만들어야 한다. Memorization을 들고 갈꺼면.
+( + init_score_opti )
+- Grad vanishing 문제 해결하기 : Difficult
+
+< Diversity >
+- Diversity Table: DDIM + CNO + init_opti : Easy (진행 중)
+
+
+# 260623 Tue: 
+TODO 
+[Easy] Init_score_opti Dockerfile: 내가 생각한 Memorization에서 가장 강력한 baselline
+[Difficult] Vanishing Grad prb: init_opti는 다수의 DDPM denoising step에 의해 grad == 0 가 된다.
+
+Table을 아래와 같이 만들었다!!
+< Memorization >
+- 메모라이제이션 테이블 만들기: DDIM + CNO + init_score_opti
+< Diversity >
+- Diversity Table: DDIM + CNO 
+
+현재 시점에서 가장 중요한 문제: initial noise까지 loss의 grad가 흘러가지 않는다.
+그 이유는 DDIM 에서 denoising step에 사용되는 UNet이 많다보니, gradient vanishing 문제가 발생한다.
+그 문제를 해결하기 위해서 adjointDPM이라는 방법을 적용해야겠다.
+
+# 260626 (Fri): Tweedie_opti 구현
+
+문제는 DDIM의 long sequential UNet Chain으로 grad를 흘리는 과정에서 생길 vanishing 문제였고 이를 adjointDPM 이라는 방법을 통해서 위 문제를 해결했다.
+adjointDPM의 주요 핵심은 latent까지 흘러가는 grad를 곱셈이 아닌 덧셈 과정으로 처리한 것이다.
+원래의 방식은 loss의 computational trajectory에 있는 모든 과정의 grad를 곱셈으로 계산을 했다.
+하지만 위 방식은 x_t에 흘려줄 grad를 time t 의 adjoint state라고 정의하고
+adjoint state의 differention의 formulation을 함으로서 grad 계산을 덧셈으로 바꾼 것에 있다.
+위 문제가 OOM과 gradient vanishing을 해결하리라 예상했고 구현에 성공했다.
+
+======= TODO LIST =========
+0. (Important) ***포스터 만들기***
+
+1. Evaluation Method를 탑티어 논문들에 따르기(datasets, metrics) based on CVPR-25, NeurlPS-25 works
+2. Experiment Scale up: 1번 follow (연구소)
+3. computational cost 비교하기 (연구소)
+
+
+1. Eval code should be followed by CVPR-25.
+
+평가 메트릭은 R, FID, CLIPscore로 나와있다.
+- R은 replication score로 낮을수록 좋다.
+- FID는 image fidelity 관련되있으며 낮을수록 좋다.
+- CLIPscore는 T2I 메트릭으로서 높을수록 좋다.
+
+확인을 했을때, memorization eval 방법을 찾았다.
+"Detecting, Explaining, and Mitigating Memorization in Diffusion Models" 에 대한 eval로 따르기로 했다.
+ICLR 2024 Oral을 받은 논문이고 Sitation 수도 많기에 이를 adaptation하는 것이 좋을 것 같다.
+
+위 논문은 memorization 된 sd의 ckpt를 제공하는 점이 특징이다.
+memo_SD는 Memo_DB + General_DB 에 대해서 fine-tuning을 한 SD를 사용한다.
+- Memo_DB : 먼저 LAION-2B에서 200의 text-image pair를 꺼내고 이를 각각 200개 복사하여 Memorization Datasets을 40k를 구성한다.
+- General_DB : 40k의 랜덤 image-text pair
+
+# 260627: Sat : Eval 코드 재구축
+
+Wen et al. 기준으로 Eval 구축하기
+
+(Idea 1) Memorization 문제를 x_t --> x_{t-1} 로 가는 벡터장이 수렴하는 것으로 알 수 있다.
+그래서 전자기학에 나오는 Gauss law 처럼 denoising step의 divergence가 memorization의 척도가 될 수 있다.
+나중에 한번 mearsure 해봐야겠다.
+
+일단 오늘은 init_score_opti 를 batch 연산 처리 완료했다. 그리고 현재 init_opti 를 Eval 기준을 바꿔서
+다시 한 번 metric 경향을 측정하기 위해 lr sweep으로 T2I와 SSCD-GT를 측정하고자 한다.
+
+==> 이를 수정한 메소드에 대한 lr sweep Table (Wen et al. eval, sd14_memor_LAION2B_40k, lambda_align=0.00, NFE=50, seed=42, batch=5, 10 prompts)
+
+| lr   | CLIPScore | PickScore | ImageReward | SSCD-to-GT (mean) | per_sample (ms) | peak VRAM (GB) |
+|------|-----------|-----------|-------------|-------------------|-----------------|----------------|
+| 0.00 | 31.07±3.14 | 18.76±1.77 | 0.26±0.83  | 0.513±0.101       | 18773.8         | 12.88          |
+| 0.02 | 30.99±3.56 | 18.62±1.69 | 0.06±0.88  | 0.425±0.119       | 20144.2         | 12.88          |
+| 0.04 | 31.07±2.92 | 18.57±1.77 | 0.10±0.89  | 0.401±0.135       | 18826.6         | 12.88          |
+
+→ KEY FINDINGS (epsilon_ref fix 후):
+1. SSCD-to-GT 감소: 0.513 → 0.425 → 0.401 (lr↑ = memorization 완화 ✅)
+2. CLIPScore 유지: ~31 (lr과 무관 → trade-off 미관측 ⚠️)
+3. 연산 비용 일정: ~940-1000s / VRAM 12.88GB (lr과 무관)
+4. epsilon_ref = x_T_init.detach() fix 적용 후에도 trade-off 미관측
+   → memo_proxy loss 자체의 설계 재검토 필요 (diagnostic → optimization 목표 전환 한계)
+
+## 3-method 비교 (Wen et al. eval, sd14_memor_LAION2B_40k, NFE=50, seed=42, 10 prompts × 5 images)
+
+| Method            | CLIPScore   | PickScore   | ImageReward | SSCD-to-GT (mean) |
+|-------------------|-------------|-------------|-------------|-------------------|
+| DDIM (baseline)   | 31.09±2.82  | 18.43±1.75  | 0.05±0.86   | 0.456±0.144       |
+| init_score_noise  | 30.53±2.66  | 18.16±1.99  | -0.09±0.98  | 0.179±0.079       |
+| init_opti (lr=0.07)| 30.69±3.01  | 18.31±1.89  | 0.03±0.89   | 0.341±0.155       |
+
+→ KEY FINDINGS:
+1. init_score_noise (Han et al.) 가 memorization 완화에 가장 강함: SSCD-to-GT 0.179
+2. init_opti (우리 방법)도 효과적: DDIM 대비 SSCD-to-GT 0.456→0.341 (-25%)
+3. T2I 정합성 (CLIPScore)은 세 메서드 모두 ~31로 유지 → memorization 완화가 품질 붕괴 없이 이루어짐
+4. init_score_noise > init_opti > DDIM 순으로 memorization 완화 효과
+5. 향후: lambda_align sweep, 더 큰 lr, 더 많은 optimization step으로 init_opti 성능 향상 가능
+
+-> TODO List
+1. init_score_opti에 대해서 sweep함으로서 SSCD-CLIPscore trade-off 관계를 관측해야겠다.
+2. init_opti 코드 보기
+
+Problem: loss = || epslion.detach() - epslion_s ||^2 에서 epslion 이 optimization 중에 계속 변화함
+==> 이를 수정한 메소드에 대한 lr sweep Table (Wen et al. eval, sd14_memor_LAION2B_40k, lambda_align=0.00, NFE=50, seed=42, batch=5, 10 prompts)
+
+| lr   | CLIPScore   | PickScore   | ImageReward | SSCD-to-GT (mean) | per_sample (ms) | peak VRAM (GB) |
+|------|-------------|-------------|------------|-------------------|-----------------|----------------|
+| 0.00 | 31.07±3.14  | 18.76±1.77  | 0.26±0.83  | 0.513±0.101       | 18773.8         | 12.88          |
+| 0.02 | 30.99±3.56  | 18.62±1.69  | 0.06±0.88  | 0.425±0.119       | 20144.2         | 12.88          |
+| 0.04 | 31.07±2.92  | 18.57±1.77  | 0.10±0.89  | 0.401±0.135       | 18826.6         | 12.88          |
+| 0.06 | 30.98±2.83  | 18.68±1.63  | 0.20±0.90  | 0.397±0.144       | 18842.6         | 12.88          |
+| 0.08 | 31.10±2.84  | 18.56±1.71  | 0.18±0.85  | 0.385±0.153       | 18844.8         | 12.88          |
+
+--> 현재는 init_score_opti에서 memo-CLIPscore trade-off 를 관측 실험을 하고 있다.
+
+# 260627 (Sat): init_score_opti (= init_score_noise 경로, Han et al.) lr sweep Eval
+# 조건: sd14_memor_LAION2B_40k, NFE=50, CFG=7.5, seed=42, oi=10, 10 prompts × 5 images (Wen et al. eval 기준)
+# 경로: workdir/memorization/sd14_memor_LAION2B_40k/init_score_noise/NFE=50/per_sample/CFG=7.5/lr=*/tl=0.9/oi=10/seed=42/eval/
+
+| lr   | CLIPScore    | PickScore    | ImageReward  | SSCD-to-GT (mean) | per_sample (ms) | peak VRAM (GB) |
+|------|--------------|--------------|--------------|-------------------|-----------------|----------------|
+| 0.00 | 30.99±3.03   | 18.65±1.63   | 0.21±0.80    | 0.476±0.142       | 1615.7          | 13.70          |
+| 0.01 | 30.83±2.91   | 18.24±1.94   | -0.01±0.85   | 0.249±0.123       | 1543.6          | 17.62          |
+| 0.03 | 30.89±2.58   | 18.11±1.99   | -0.05±0.97   | 0.171±0.106       | 1406.3          | 17.60          |
+| 0.05 | 30.05±2.88   | 17.59±2.30   | -0.29±1.12   | 0.137±0.074       | 1421.3          | 17.61          |
+
+→ KEY FINDINGS:
+1. SSCD-to-GT 단조 감소: 0.476 → 0.249 → 0.171 → 0.137 (lr↑ = memorization 완화 ✅)
+2. CLIPScore: lr=0.00~0.03 구간 ~30.8-30.9 유지, lr=0.05에서 30.05로 소폭 하락
+3. PickScore(18.65→17.59) / ImageReward(0.21→-0.29) lr↑에 따라 단조 감소 → T2I↔memo trade-off 관측 ⚠️
+4. 연산 비용은 lr과 무관 (~1400-1600ms / VRAM 13.7-17.6GB)
+5. lr=0.01은 memorization 완화폭이 크면서(SSCD 0.249) T2I 손실이 적어(CLIP 30.83) sweet-spot 후보
+--> 만약 관측이 된다면 코드상의 문제가 있는 것이다.
