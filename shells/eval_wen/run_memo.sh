@@ -21,7 +21,7 @@ seed=42
 num_samples=10
 num_images_per_prompt=5
 b_size=${num_images_per_prompt}
-text_name="wen2024_memorized_prompts.txt"
+text_name="new_memorized_text_prompt.txt"
 
 # b. CNO (infoNCE) config
 iopt_iter=3
@@ -30,18 +30,19 @@ infoNCE_temp=0.1
 window_size=16
 gamma=1.0
 
-# lr_list=(0.02 0.04 0.06 0.08)
+lr_list=(0.00 0.02 0.04 0.06 0.08)
 # lr_list=(0.02)
-init_steps_list=(10 15 20 15)
+# init_steps_list=(10 15 20 15)
 
-# for lr in "${lr_list[@]}"; do
-for init_steps in "${init_steps_list[@]}"; do
+for lr in "${lr_list[@]}"; do
+# for init_steps in "${init_steps_list[@]}"; do
     echo "==================== init_steps=${init_steps} =========================="
-    # init_steps=10
+    echo "==================== lr=${lr} =========================="
+    init_steps=5 # IMPOTANT
     num_opt_steps=2
     gap_steps=3
     base_s_ratio=0.5
-    lr=0.08
+    # lr=0.08
     lambda_align=0.00
     init_opti_prompt_dir="examples/assets/${text_name}"
 
@@ -68,7 +69,7 @@ for init_steps in "${init_steps_list[@]}"; do
 
     ddim_dir="${base_dir}/ddim/${cfg_nfe_ddim}/seed=${seed}"
     cno_dir="${base_dir}/cno_infoNCE/${cfg_nfe_cno}/temp=${infoNCE_temp}_win=${window_size}_gamma=${gamma}_iter=${iopt_iter}/seed=${seed}"
-    init_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}_nsteps=${num_opt_steps}_gap=${gap_steps}_lr=${lr}/seed=${seed}/batch=${b_size}"
+    init_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/lr=${lr}/seed=${seed}/batch=${b_size}"
 
     ddim_eval="${ddim_dir}/eval"
     cno_eval="${cno_dir}/eval"
@@ -85,15 +86,15 @@ for init_steps in "${init_steps_list[@]}"; do
     echo "  CNO   → ${cno_dir}"
     echo "  init  → ${init_dir}"
 
-    # =========================== 4. [Inference] (comp 자동 측정) ===========================
-    # --- DDIM ---
+    # # =========================== 4. [Inference] (comp 자동 측정) ===========================
+    # # --- DDIM ---
     # echo "================== [INFO]: DDIM Inference =================="
     # echo "  [CKPT] ${model_key}"
     # python -m examples.text_to_mscoco \
     #     ${STD_FLAG} ${ETC_FLAG} --cfg_guidance ${cfg_ddim} ${INF_FLAG} ${DIR_FLAG} \
     #     --workdir ${ddim_dir}
 
-    # --- CNO (infoNCE) ---
+    # # --- CNO (infoNCE) ---
     # echo "================== [INFO]: CNO(InfoNCE) Inference =================="
     # echo "  [CKPT] ${model_key}"
     # python -m examples.text_to_mscoco \
@@ -147,28 +148,55 @@ for init_steps in "${init_steps_list[@]}"; do
     # echo "  [CHECK] eval files:"
     # /bin/ls ${cno_eval}/*.csv 2>/dev/null
 
-    # =========================== 7. [Eval: init_opti] ===========================
-    echo "================== [INFO]: Eval [init_opti] → ${init_eval}/ =================="
-    mkdir -p ${init_eval}
-    python compute_sscd_gt.py \
-        --gen_dir ${init_dir}/result --ref_dir ${gt_ref_dir} \
-        --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
-        --gpu ${gpu} \
-        --output_csv ${init_eval}/sscd_gt_metrics.csv
+    # # =========================== 7. [Eval: init_opti] ===========================
+    # echo "================== [INFO]: Eval [init_opti] → ${init_eval}/ =================="
+    # mkdir -p ${init_eval}
+    # python compute_sscd_gt.py \
+    #     --gen_dir ${init_dir}/result --ref_dir ${gt_ref_dir} \
+    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+    #     --gpu ${gpu} \
+    #     --output_csv ${init_eval}/sscd_gt_metrics.csv
 
-    python -m compute_t2i_metrics \
-        --eval_dir ${init_dir}/result --prompt_dir ${t2i_prompt_dir} \
-        --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
-        --output_csv ${init_eval}/t2i_metrics.csv \
-        --device cuda:${gpu} ${CS_FLAG}
+    # python -m compute_t2i_metrics \
+    #     --eval_dir ${init_dir}/result --prompt_dir ${t2i_prompt_dir} \
+    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+    #     --output_csv ${init_eval}/t2i_metrics.csv \
+    #     --device cuda:${gpu} ${CS_FLAG}
 
-    python merge_benchmark.py --collect_dir ${init_eval}
+    # python merge_benchmark.py --collect_dir ${init_eval}
 
-    # eval 파일 검증
-    echo "  [CHECK] eval files:"
-    /bin/ls ${init_eval}/*.csv 2>/dev/null
-    echo "  [CHECK] comp files:"
-    /bin/ls ${init_comp}/*.csv 2>/dev/null
+    # # eval 파일 검증
+    # echo "  [CHECK] eval files:"
+    # /bin/ls ${init_eval}/*.csv 2>/dev/null
+    # echo "  [CHECK] comp files:"
+    # /bin/ls ${init_comp}/*.csv 2>/dev/null
 
 done
-echo "[Done]"
+
+# =========================== 8. [Trade-off CSV + Plot] ===========================
+# gap_steps 단계 아래 plot/ 폴더: trd/ (curve png), csv/ (tradeoff.csv)
+# memorization method(init_opti)만 비교 (DDIM/CNO 등 baseline 제외), lr 표시 없음.
+plot_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/plot"
+mkdir -p ${plot_dir}/trd ${plot_dir}/csv
+
+echo "================== [INFO]: Collect T2I-SSCD trade-off (lr별 분할 포함) =================="
+python collect_tradeoff.py --base_dir ${base_dir} --out ${plot_dir}/csv/tradeoff.csv --split_lr
+
+echo "================== [INFO]: Plot trade-off curves → ${plot_dir}/trd/ (lr 표시 없음) =================="
+for xm in clipscore pickscore imagereward; do
+    python plot_tradeoff.py --csv ${plot_dir}/csv/tradeoff.csv --x_metric ${xm} \
+        --out ${plot_dir}/trd/tradeoff_${xm}.png \
+        --methods init_opti
+done
+
+# trade-off curve PNG(전체 lr, lr 표시 없음)를 각 lr 폴더에 복사
+for lr_dir in ${plot_dir}/csv/lr=*; do
+    [ -d "${lr_dir}" ] || continue
+    lr_name="$(basename "${lr_dir}")"
+    mkdir -p "${plot_dir}/trd/${lr_name}"
+    for xm in clipscore pickscore imagereward; do
+        /bin/cp -f "${plot_dir}/trd/tradeoff_${xm}.png" "${plot_dir}/trd/${lr_name}/" 2>/dev/null
+    done
+done
+
+echo "[Done] → ${plot_dir}/csv/tradeoff.csv (+ lr=*/ )  +  ${plot_dir}/trd/tradeoff_*.png (+ lr=*/ )"

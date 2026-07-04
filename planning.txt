@@ -340,3 +340,47 @@ Problem: loss = || epslion.detach() - epslion_s ||^2 에서 epslion 이 optimiza
 4. 연산 비용은 lr과 무관 (~1400-1600ms / VRAM 13.7-17.6GB)
 5. lr=0.01은 memorization 완화폭이 크면서(SSCD 0.249) T2I 손실이 적어(CLIP 30.83) sweet-spot 후보
 --> 만약 관측이 된다면 코드상의 문제가 있는 것이다.
+
+# 260628: 
+======= TODO LIST =========
+0. (Important) ***포스터 만들기***
+0-1. init_step 을 달리 하며 lr sweep 하기
+Goal: Memo-CLIPscore trade-off가 init_step 에 영향 여부를 확인
+
+
+1. Experiment Scale up: 1번 follow (연구소)
+2. computational cost 비교하기 (연구소)
+
+빅이슈: memorized sd14 ckpt를 소내 반입해야 하는데 생각보다 귀찮다.
+
+*** (체크포인트 소분) 그래서 일단 코드상 문제가 있다고 가정하고 코드 주시를 진행할 예정이다.
+
+이후 Inference를 소내에서 진행 후 sheet에 기입. => 만약 init_step이 클수록 trade-off 관계가 보인다면 설명이 깔끔 
+=> init_step에 따라 경향성 관찰 불가 시, 코드상 문제
+하지만 현재 나는 밖에서 쉽게 할 수 있는 것이 코드상 문제 점검이기에 현재 진행 중에 있다.
+
+# 260629 (Mon): 체크포인트 들여오기 및 init_step의 영향 실험 관측
+
+0. ckpt와 datasets 들여오기
+1. init_step 에 따라 Memo-CLIPscore trade-off 관계 관찰하기
+-> 이를 통해 코드 오류 & 근본적인 오류 확인 잡기
+(Future Work) 2. Scale Up Experiment
+
+# 260704(SAT)
+
+TODO
+- Eval Method Fix: Chen et al.
+The present Memorization Eval
+
+=> Approach 1
+Global memo (Chen)
+Local memo (Chen)
+But, Global memo (Wen) is more better evaulation method compared to chen et al.
+=> Approach 2
+Global memo (Wen)
+
+- Code checking
+Text prompt => plot proxy
+Try early init_step optimization (scale up)
+
+- Trade off curve

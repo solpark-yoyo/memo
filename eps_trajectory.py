@@ -411,7 +411,7 @@ def main():
 
     # ---- Load model ----
     print("=" * 60)
-    print("Loading Stable Diffusion 1.5 ...")
+    print(f"Loading model: {os.path.basename(os.path.normpath(args.model_key))} ...")
     print(f"  model_key : {args.model_key}")
     print(f"  device    : {device}")
     print(f"  NFE       : {args.num_inference_steps}")

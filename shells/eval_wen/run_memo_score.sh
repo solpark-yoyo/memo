@@ -1,27 +1,26 @@
 #!/bin/bash
 # ===================================================================
-#  init_score_noise (Han et al. NeurIPS 2025) — memorization baseline inference
-#  per_sample variant.
+#  init_score_noise (Han et al. NeurIPS 2025) — memorization baseline
+#  Wen et al. (ICLR 2024) eval 기준 / sd14_memor_LAION2B_40k
 #
-#  ※ 수동으로 init_score_noise env 활성화 후 실행:
-#    conda activate init_score_noise
+#  conda env: div_DM (inference + eval 동일 env 사용)
 #    bash shells/run_memo_score.sh
-#  (eval은 ori_memo env에서 별도 수행)
 # ===================================================================
+# PY="/home/geonsoo/anaconda3/envs/div_DM/bin/python"
 
 # =========================== 1. [Config] ===========================
 gpu=0
 NFE=50
 cfg_initnoise=7.5
 seed=42
-num_samples=20
+num_samples=15
 batch=5
 num_images_per_prompt=${batch}
 target_loss=0.9
 optim_iters=1000
 lr=0.01
-model_id="ckpt/stable-diffusion-v1-5"
-text_name="memorized_prompts_membench.txt"
+model_id="ckpt/sd14_memor_LAION2B_40k"
+text_name="new_memorized_text_prompt.txt"
 
 # Eval config
 t2i_prompt_dir="examples/assets/${text_name}"
@@ -30,13 +29,13 @@ cs_only=false
 CS_FLAG=""; [[ "${cs_only}" == "true" ]] && CS_FLAG="--cs_only"
 
 # =========================== 2. [Workdir] ===========================
-base_dir="workdir/memorization/sd15"
+base_dir="workdir/memorization/sd14_memor_LAION2B_40k"
 output_path="${base_dir}/init_score_noise/NFE=${NFE}"
 gen_dir="${output_path}/per_sample/CFG=${cfg_initnoise}/lr=${lr}/tl=${target_loss}/oi=${optim_iters}/seed=${seed}"
 
 echo "${gen_dir}"
 
-# =========================== 3. [Inference] (init_score_noise env) ===========================
+# =========================== 3. [Inference] (div_DM env) ===========================
 echo "================== [INFO]: init_score_noise Inference =================="
 python baselines/init_score_noise/generate_init_score_noise.py \
     --method adj_init_noise --per_sample \
@@ -48,8 +47,7 @@ python baselines/init_score_noise/generate_init_score_noise.py \
 
 echo "[Done] images at ${gen_dir}/"
 
-# =========================== 4. [Eval] (ori_memo env) ===========================
-# ※ inference는 init_score_noise env, eval은 ori_memo env에서 실행
+# =========================== 4. [Eval] (div_DM env) ===========================
 echo "================== [INFO]: Eval [init_score_noise] =================="
 python compute_vendi_score.py \
     --eval_dir ${gen_dir} \

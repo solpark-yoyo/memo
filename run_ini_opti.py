@@ -11,6 +11,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 import argparse, torch
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 from munch import munchify
 from latent_diffusion import StableDiffusion
@@ -544,6 +548,94 @@ def ddim_inference(sd, x_T, uc, c, cfg):
     return (img / 2 + 0.5).clamp(0, 1)
 
 
+@torch.no_grad()
+def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
+                              record_dir, prompt_tag, filename="memo_proxy_ddim.png"):
+    """x_T opti 종료 후 DDIM sampling 하며 모든 denoising step 에서 memo_proxy 수집.
+
+    memo_proxy(t) = || ε_ref - ε_s(x_s(t), s) ||^2 / D
+      - ε_ref = 최적화된 x_T (DDIM 입력 noise)
+      - x̂₀|t  = Tweedie(x_t, t)
+      - x_s    = √ᾱ_s · x̂₀|t + √(1-ᾱ_s) · ε_ref,  s = 고정 mid-noise (base_s_ratio)
+      - ε_s    = ε_θ(x_s, s)
+    denoising 이 진행될수록 x̂₀|t → x₀ 이므로 x_s → true forward, ε_s → ε_ref.
+    ∴ memo_proxy 는 단조 감소 경향(= memorization 완화)을 보여야 함.
+
+    batch(= num_seeds) 차원으로 mean ± std 를 계산해 plot + csv → record_dir/.
+    """
+    os.makedirs(record_dir, exist_ok=True)
+    timesteps = list(sd.scheduler.timesteps)
+    s_idx = int(len(timesteps) * base_s_ratio)
+    s_target = timesteps[s_idx]
+    alpha_s = sd.alpha(s_target)
+
+    epsilon_ref = x_T.detach().to(sd.dtype)        # 최적화된 x_T = DDIM 입력 noise
+    zt = x_T.to(sd.dtype) * sd.scheduler.init_noise_sigma
+
+    step_indices = []
+    memo_proxy_per_step = []                        # (B,) numpy per step
+
+    for step_idx, t in enumerate(timesteps):
+        at = sd.alpha(t)
+        at_prev = sd.alpha(t - sd.skip)
+        noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
+        eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+        x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
+
+        # ---- memo proxy at this step (eps_trajectory.py:107-116 과 동일) ----
+        x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
+               + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref)
+        noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
+        eps_s = noise_uc_s + cfg * (noise_c_s - noise_uc_s)
+        B = eps_s.shape[0]
+        memo_proxy = (epsilon_ref - eps_s).reshape(B, -1).pow(2).mean(-1)   # (B,)
+        memo_proxy_per_step.append(memo_proxy.float().cpu().numpy())
+        step_indices.append(step_idx)
+
+        # DDIM step (η=0)
+        zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+
+    proxy_arr = np.stack(memo_proxy_per_step, axis=0)   # (num_steps, B)
+    mean = proxy_arr.mean(axis=1)
+    std = proxy_arr.std(axis=1)
+    steps = np.asarray(step_indices)
+
+    # ---- plot: batch mean ± std (+개별 batch faint) ----
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for b in range(B):
+        ax.plot(steps, proxy_arr[:, b], color="tab:blue", alpha=0.12, linewidth=0.8)
+    ax.plot(steps, mean, color="tab:blue", linewidth=2.2, marker="o", markersize=4,
+            label="mean memo_proxy")
+    ax.fill_between(steps, mean - std, mean + std, color="tab:blue", alpha=0.2,
+                    label=f"±1 std (batch n={B})")
+    ax.set_xlabel("Denoising Step", fontsize=12)
+    ax.set_ylabel(r"memo_proxy  $\|\,\epsilon_{ref} - \epsilon_s\,\|^2 / D$", fontsize=12)
+    ax.set_title(
+        f"memo_proxy vs denoising step (post x_T opti) — {prompt_tag}\n"
+        f"batch mean ± std (n={B}, s_idx={s_idx}, base_s_ratio={base_s_ratio})",
+        fontsize=11)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
+    plt.tight_layout()
+    plot_path = os.path.join(record_dir, filename)
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    print(f"[plot] memo_proxy (post-opti DDIM) -> {plot_path}")
+
+    # ---- csv: step, mean, std, per-sample ----
+    csv_path = os.path.join(record_dir, "memo_proxy_ddim.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["step", "mean", "std"] + [f"sample_{b:02d}" for b in range(B)])
+        for si, m, sd_v, row in zip(steps, mean, std, proxy_arr):
+            w.writerow([int(si), f"{m:.6f}", f"{sd_v:.6f}"]
+                       + [f"{v:.6f}" for v in row])
+    print(f"[csv]  memo_proxy (post-opti DDIM) -> {csv_path}")
+
+    img = sd.decode(x0_hat)
+    return (img / 2 + 0.5).clamp(0, 1), plot_path
+
+
 def load_prompts(prompt_dir, num_samples):
     """prompt 파일에서 앞 num_samples개 prompt를 순서대로 로드."""
     with open(prompt_dir, "r") as f:
@@ -581,8 +673,9 @@ def main():
 
     # ---- 벤치마크 측정 시작 ----
     import time
-    torch.cuda.reset_peak_memory_stats()
-    t_start = time.perf_counter()
+    comp_rows = []   # (sample_idx, time_per_sample_sec, peak_vram_GB) per inference image
+    _total_time_s = 0.0     # 모든 batch 처리 시간 합 (총 소요 시간)
+    _total_peak_gb = 0.0    # 전체 실행 중 최대 VRAM (batch peak 들의 max)
 
     solver_config = munchify({"num_sampling": args.NFE})
     sd = StableDiffusion(solver_config=solver_config, model_key=args.model_key, device=device, seed=args.base_seed)
@@ -611,22 +704,26 @@ def main():
         for prompt in prompts:
             f.write(prompt + "\n")
 
+    # DDIM(text_to_mscoco)과 동일: set_seed 1회 후 prompt마다 batch randn 연속 (reset X)
+    set_seed(args.base_seed)
+
     for i, prompt in enumerate(prompts):
         print(f"\n[{i+1}/{len(prompts)}] \"{prompt}\" (batch={args.num_seeds})")
 
         # text embedding (1회 계산, batch로 복제)
-        uc, c = sd.get_text_embed(null_prompt="", prompt=prompt)
-        uc_batch = uc.repeat(args.num_seeds, 1, 1)
-        c_batch = c.repeat(args.num_seeds, 1, 1)
+        uc, c = sd.get_text_embed(null_prompt="", prompt=prompt) # sen : [1,77,768]
+        uc_batch = uc.repeat(args.num_seeds, 1, 1) # [num_images_per_prompt,77,768]
+        c_batch = c.repeat(args.num_seeds, 1, 1) # num_images_per_prompt == num_seeds
 
-        # 각 seed마다 다른 초기 noise 생성 (재현성 보장)
-        x_T_init_list = []
-        for j in range(args.num_seeds):
-            seed = args.base_seed + j * 100
-            set_seed(seed)
-            x_T_init_list.append(torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32))
-        x_T_init_batch = torch.cat(x_T_init_list, dim=0)  # (num_seeds, 4, 64, 64)
+        # 초기 noise — DDIM(text_to_mscoco)과 동일: main set_seed 1회 후
+        # prompt마다 torch.randn([num_seeds,4,64,64]) batch 연속 생성 (reset X)
+        x_T_init_batch = torch.randn(args.num_seeds, 4, 64, 64, device=device, dtype=torch.float32)
         print(f"  x_T batch: {x_T_init_batch.shape}")
+
+        # ---- per-batch compute cost 측정 시작 (optimize + inference) ----
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        _t0 = time.perf_counter()
 
         # Phase 1: optimize x_T (batch)
         record_dir = os.path.join(args.output_dir, "record", f"img_{i:04d}")
@@ -640,30 +737,55 @@ def main():
         )
         print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
 
-        # Phase 2: DDIM inference (batch)
-        img_batch = ddim_inference(sd, x_T_opt_batch, uc_batch, c_batch, args.cfg)
+        # Phase 2: DDIM inference (batch) + step-wise memo_proxy 수집 → plot
+        # x_T opti 종료 후 DDIM sampling 하며 각 denoising step 의 memo_proxy 를
+        # batch(num_seeds) mean ± std 로 시각화 → record/img_{i:04d}/
+        img_batch, _ = ddim_inference_with_proxy(
+            sd, x_T_opt_batch, uc_batch, c_batch, args.cfg,
+            args.base_s_ratio, record_dir, prompt_tag=f"img_{i:04d}")
+
+        torch.cuda.synchronize()
+        _t1 = time.perf_counter()
+        _batch_time_s = _t1 - _t0
+        _batch_peak_gb = torch.cuda.max_memory_allocated() / (1024**3)
+        _per_sample_sec = (_batch_time_s / args.num_seeds)   # sec (단위 통일)
+        _total_time_s += _batch_time_s
+        _total_peak_gb = max(_total_peak_gb, _batch_peak_gb)
 
         # save  (init_score_noise 라벨링 표준: img_{prompt:04d}_{sample:02d}.png)
         for j in range(args.num_seeds):
             fname = f"img_{i:04d}_{j:02d}.png"
             save_image(img_batch[j], os.path.join(result_dir, fname))
-            print(f"  seed={args.base_seed + j * 100} -> result/{fname}")
+            comp_rows.append((i * args.num_seeds + j, _per_sample_sec, _batch_peak_gb))
+            print(f"  sample[{j}] -> result/{fname}  (batch noise from single seed={args.base_seed})")
 
-    # ---- 벤치마크 측정 종료 + comp_metrics.csv 저장 ----
-    t_end = time.perf_counter()
-    total_time = t_end - t_start
-    total_imgs = len(prompts) * args.num_seeds
-    per_sample_ms = (total_time / total_imgs) * 1000 if total_imgs > 0 else 0
-    peak_vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
-
+    # ---- comp_metrics.csv: per-sample time/VRAM + mean/std ----
+    import statistics as _st
     comp_dir = os.path.join(args.output_dir, "comp")
     os.makedirs(comp_dir, exist_ok=True)
     comp_csv = os.path.join(comp_dir, "comp_metrics.csv")
+    _times = [r[1] for r in comp_rows]
+    _vrams = [r[2] for r in comp_rows]
+    _n = len(comp_rows)
+    _mean_t = sum(_times) / _n if _n else 0.0
+    _mean_v = sum(_vrams) / _n if _n else 0.0
+    _std_t = _st.pstdev(_times) if _n > 1 else 0.0
+    _std_v = _st.pstdev(_vrams) if _n > 1 else 0.0
     with open(comp_csv, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["method", "num_samples", "total_time_sec", "per_sample_time_ms", "peak_vram_GB"])
-        writer.writerow(["init_opti", total_imgs, f"{total_time:.2f}", f"{per_sample_ms:.1f}", f"{peak_vram_gb:.2f}"])
-    print(f"\n[BENCH] init_opti: total={total_time:.2f}s  per_sample={per_sample_ms:.1f}ms  peak_VRAM={peak_vram_gb:.2f}GB")
+        writer.writerow(["sample_idx", "time_per_sample_sec", "peak_vram_GB"])
+        for r in comp_rows:
+            writer.writerow([r[0], f"{r[1]:.2f}", f"{r[2]:.4f}"])
+        writer.writerow([])
+        writer.writerow(["statistic", "time_per_sample_sec", "peak_vram_GB"])
+        writer.writerow(["mean", f"{_mean_t:.2f}", f"{_mean_v:.4f}"])
+        writer.writerow(["std",  f"{_std_t:.2f}", f"{_std_v:.4f}"])
+        writer.writerow([])
+        writer.writerow(["total_time_sec", f"{_total_time_s:.2f}"])
+        writer.writerow(["total_peak_vram_GB", f"{_total_peak_gb:.4f}"])
+    print(f"\n[BENCH] init_opti: {_n} samples | "
+          f"time_per_sample mean={_mean_t:.4f}s std={_std_t:.4f}s | "
+          f"peak_vram mean={_mean_v:.3f}GB std={_std_v:.3f}GB")
     print(f"[BENCH] saved → {comp_csv}")
 
     print("\nDone.")

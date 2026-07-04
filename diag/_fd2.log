@@ -1,0 +1,13 @@
+>>> gradient_checkpointing enabled? n/a
+
+>>> Inline faithful copy of optimize_xT_adj adjoint path (t_idx=2) to capture g_xT ...
+  [adj] j=1: |g|=6.442717e+00  ratio(to terminal)=1.734338
+  [adj] j=0: |g|=1.217194e+01  ratio(to terminal)=3.276609
+
+g_xT_adjoint: |g|=1.217194e+01
+terminal g norm: 3.714798e+00
+
+>>> Computing full-autograd ground truth (whole chain with grad) ...
+g_xT_autograd: |g|=3.231029e+01
+
+>>> Computing central finite-difference gradient (64 random coords) ...

@@ -1,0 +1,70 @@
+    [tweedie t_idx=10] alpha_t=0.0438  SNR=0.046  (1/sqrt(alpha)=4.78x amplification)
+memo_proxy(↓=mitigate): 0.474071  loss_memo: 0.474071  loss_align: 0.000000
+    [adj] step  9->0: |g|=1.979620e-01  |g_prev|=2.082131e-01  ratio(step)=0.9508  ratio(to terminal)=0.950766
+    [adj] step  8->0: |g|=2.098027e-01  |g_prev|=1.979620e-01  ratio(step)=1.0598  ratio(to terminal)=1.007635
+    [adj] step  7->0: |g|=2.495231e-01  |g_prev|=2.098027e-01  ratio(step)=1.1893  ratio(to terminal)=1.198403
+    [adj] step  6->0: |g|=2.852260e-01  |g_prev|=2.495231e-01  ratio(step)=1.1431  ratio(to terminal)=1.369875
+    [adj] step  5->0: |g|=3.272114e-01  |g_prev|=2.852260e-01  ratio(step)=1.1472  ratio(to terminal)=1.571522
+    [adj] step  4->0: |g|=3.530119e-01  |g_prev|=3.272114e-01  ratio(step)=1.0788  ratio(to terminal)=1.695436
+    [adj] step  3->0: |g|=4.267214e-01  |g_prev|=3.530119e-01  ratio(step)=1.2088  ratio(to terminal)=2.049446
+    [adj] step  2->0: |g|=5.384419e-01  |g_prev|=4.267214e-01  ratio(step)=1.2618  ratio(to terminal)=2.586014
+    [adj] step  1->0: |g|=6.521522e-01  |g_prev|=5.384419e-01  ratio(step)=1.2112  ratio(to terminal)=3.132138
+    [adj] step  0->0: |g|=7.394665e-01  |g_prev|=6.521522e-01  ratio(step)=1.1339  ratio(to terminal)=3.551489
+    [opt-adj] step 10: memo=0.474071 align=0.000000 |g_xT|=0.7395 |dxT|=0.1280
+    [tweedie t_idx=13] alpha_t=0.0711  SNR=0.076  (1/sqrt(alpha)=3.75x amplification)
+memo_proxy(↓=mitigate): 0.552385  loss_memo: 0.552385  loss_align: 0.058848
+    [adj] step 12->0: |g|=2.745099e-01  |g_prev|=2.980626e-01  ratio(step)=0.9210  ratio(to terminal)=0.920981
+    [adj] step 11->0: |g|=2.640217e-01  |g_prev|=2.745099e-01  ratio(step)=0.9618  ratio(to terminal)=0.885793
+    [adj] step 10->0: |g|=2.606836e-01  |g_prev|=2.640217e-01  ratio(step)=0.9874  ratio(to terminal)=0.874593
+    [adj] step  9->0: |g|=2.620805e-01  |g_prev|=2.606836e-01  ratio(step)=1.0054  ratio(to terminal)=0.879280
+    [adj] step  8->0: |g|=2.714506e-01  |g_prev|=2.620805e-01  ratio(step)=1.0358  ratio(to terminal)=0.910717
+    [adj] step  7->0: |g|=2.869202e-01  |g_prev|=2.714506e-01  ratio(step)=1.0570  ratio(to terminal)=0.962617
+    [adj] step  6->0: |g|=2.933434e-01  |g_prev|=2.869202e-01  ratio(step)=1.0224  ratio(to terminal)=0.984167
+    [adj] step  5->0: |g|=2.938113e-01  |g_prev|=2.933434e-01  ratio(step)=1.0016  ratio(to terminal)=0.985737
+    [adj] step  4->0: |g|=3.055048e-01  |g_prev|=2.938113e-01  ratio(step)=1.0398  ratio(to terminal)=1.024969
+    [adj] step  3->0: |g|=3.294124e-01  |g_prev|=3.055048e-01  ratio(step)=1.0783  ratio(to terminal)=1.105179
+    [adj] step  2->0: |g|=3.510539e-01  |g_prev|=3.294124e-01  ratio(step)=1.0657  ratio(to terminal)=1.177786
+    [adj] step  1->0: |g|=3.726425e-01  |g_prev|=3.510539e-01  ratio(step)=1.0615  ratio(to terminal)=1.250216
+    [adj] step  0->0: |g|=3.931410e-01  |g_prev|=3.726425e-01  ratio(step)=1.0550  ratio(to terminal)=1.318988
+    [opt-adj] step 13: memo=0.552385 align=0.058848 |g_xT|=0.3931 |dxT|=0.1974
+    [tweedie t_idx=16] alpha_t=0.1095  SNR=0.123  (1/sqrt(alpha)=3.02x amplification)
+memo_proxy(↓=mitigate): 0.536564  loss_memo: 0.536564  loss_align: 0.105512
+    [adj] step 15->0: |g|=2.179280e-01  |g_prev|=2.323631e-01  ratio(step)=0.9379  ratio(to terminal)=0.937877
+    [adj] step 14->0: |g|=2.088670e-01  |g_prev|=2.179280e-01  ratio(step)=0.9584  ratio(to terminal)=0.898882
+    [adj] step 13->0: |g|=2.033124e-01  |g_prev|=2.088670e-01  ratio(step)=0.9734  ratio(to terminal)=0.874977
+    [adj] step 12->0: |g|=2.007618e-01  |g_prev|=2.033124e-01  ratio(step)=0.9875  ratio(to terminal)=0.864000
+    [adj] step 11->0: |g|=2.013197e-01  |g_prev|=2.007618e-01  ratio(step)=1.0028  ratio(to terminal)=0.866401
+    [adj] step 10->0: |g|=2.047134e-01  |g_prev|=2.013197e-01  ratio(step)=1.0169  ratio(to terminal)=0.881006
+    [adj] step  9->0: |g|=2.102269e-01  |g_prev|=2.047134e-01  ratio(step)=1.0269  ratio(to terminal)=0.904734
+    [adj] step  8->0: |g|=2.179665e-01  |g_prev|=2.102269e-01  ratio(step)=1.0368  ratio(to terminal)=0.938042
+    [adj] step  7->0: |g|=2.238875e-01  |g_prev|=2.179665e-01  ratio(step)=1.0272  ratio(to terminal)=0.963524
+    [adj] step  6->0: |g|=2.331768e-01  |g_prev|=2.238875e-01  ratio(step)=1.0415  ratio(to terminal)=1.003501
+    [adj] step  5->0: |g|=2.341963e-01  |g_prev|=2.331768e-01  ratio(step)=1.0044  ratio(to terminal)=1.007889
+    [adj] step  4->0: |g|=2.371797e-01  |g_prev|=2.341963e-01  ratio(step)=1.0127  ratio(to terminal)=1.020729
+    [adj] step  3->0: |g|=2.470174e-01  |g_prev|=2.371797e-01  ratio(step)=1.0415  ratio(to terminal)=1.063066
+    [adj] step  2->0: |g|=2.624242e-01  |g_prev|=2.470174e-01  ratio(step)=1.0624  ratio(to terminal)=1.129371
+    [adj] step  1->0: |g|=2.811666e-01  |g_prev|=2.624242e-01  ratio(step)=1.0714  ratio(to terminal)=1.210031
+    [adj] step  0->0: |g|=2.980692e-01  |g_prev|=2.811666e-01  ratio(step)=1.0601  ratio(to terminal)=1.282773
+    [opt-adj] step 16: memo=0.536564 align=0.105512 |g_xT|=0.2981 |dxT|=0.2657
+    [tweedie t_idx=19] alpha_t=0.1608  SNR=0.192  (1/sqrt(alpha)=2.49x amplification)
+memo_proxy(↓=mitigate): 0.423375  loss_memo: 0.423375  loss_align: 0.169059
+    [adj] step 18->0: |g|=1.358397e-01  |g_prev|=1.485815e-01  ratio(step)=0.9142  ratio(to terminal)=0.914244
+    [adj] step 17->0: |g|=1.294709e-01  |g_prev|=1.358397e-01  ratio(step)=0.9531  ratio(to terminal)=0.871379
+    [adj] step 16->0: |g|=1.267654e-01  |g_prev|=1.294709e-01  ratio(step)=0.9791  ratio(to terminal)=0.853171
+    [adj] step 15->0: |g|=1.261495e-01  |g_prev|=1.267654e-01  ratio(step)=0.9951  ratio(to terminal)=0.849026
+    [adj] step 14->0: |g|=1.268423e-01  |g_prev|=1.261495e-01  ratio(step)=1.0055  ratio(to terminal)=0.853688
+    [adj] step 13->0: |g|=1.281531e-01  |g_prev|=1.268423e-01  ratio(step)=1.0103  ratio(to terminal)=0.862511
+    [adj] step 12->0: |g|=1.296925e-01  |g_prev|=1.281531e-01  ratio(step)=1.0120  ratio(to terminal)=0.872871
+    [adj] step 11->0: |g|=1.318079e-01  |g_prev|=1.296925e-01  ratio(step)=1.0163  ratio(to terminal)=0.887108
+    [adj] step 10->0: |g|=1.345509e-01  |g_prev|=1.318079e-01  ratio(step)=1.0208  ratio(to terminal)=0.905570
+    [adj] step  9->0: |g|=1.383085e-01  |g_prev|=1.345509e-01  ratio(step)=1.0279  ratio(to terminal)=0.930859
+    [adj] step  8->0: |g|=1.427955e-01  |g_prev|=1.383085e-01  ratio(step)=1.0324  ratio(to terminal)=0.961058
+    [adj] step  7->0: |g|=1.465712e-01  |g_prev|=1.427955e-01  ratio(step)=1.0264  ratio(to terminal)=0.986470
+    [adj] step  6->0: |g|=1.489547e-01  |g_prev|=1.465712e-01  ratio(step)=1.0163  ratio(to terminal)=1.002512
+    [adj] step  5->0: |g|=1.492992e-01  |g_prev|=1.489547e-01  ratio(step)=1.0023  ratio(to terminal)=1.004831
+    [adj] step  4->0: |g|=1.529966e-01  |g_prev|=1.492992e-01  ratio(step)=1.0248  ratio(to terminal)=1.029715
+    [adj] step  3->0: |g|=1.636745e-01  |g_prev|=1.529966e-01  ratio(step)=1.0698  ratio(to terminal)=1.101581
+    [adj] step  2->0: |g|=1.820629e-01  |g_prev|=1.636745e-01  ratio(step)=1.1123  ratio(to terminal)=1.225340
+    [adj] step  1->0: |g|=2.080122e-01  |g_prev|=1.820629e-01  ratio(step)=1.1425  ratio(to terminal)=1.399987
+    [adj] step  0->0: |g|=2.339880e-01  |g_prev|=2.080122e-01  ratio(step)=1.1249  ratio(to terminal)=1.574813
+    [opt-adj] step 19: memo=0.423375 align=0.169059 |g_xT|=0.2340 |dxT|=0.3304

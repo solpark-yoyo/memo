@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/diag_dxT_lr.py", line 200, in <module>
+    main()
+  File "/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/diag_dxT_lr.py", line 99, in main
+    sd = StableDiffusion(solver_config=solver_config,
+  File "/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/latent_diffusion.py", line 89, in __init__
+    pipe = StableDiffusionPipeline.from_pretrained(model_key, torch_dtype=self.dtype, local_files_only=True).to(device)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/diffusers/pipelines/pipeline_utils.py", line 681, in to
+    module.to(torch_device, torch_dtype)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/transformers/modeling_utils.py", line 2724, in to
+    return super().to(*args, **kwargs)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1173, in to
+    return self._apply(convert)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 779, in _apply
+    module._apply(fn)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 779, in _apply
+    module._apply(fn)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 779, in _apply
+    module._apply(fn)
+  [Previous line repeated 4 more times]
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 804, in _apply
+    param_applied = fn(param)
+  File "/home/geonsoo/anaconda3/envs/init_score_noise/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1159, in convert
+    return t.to(
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 
