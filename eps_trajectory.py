@@ -8,6 +8,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 import argparse
+import random
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -338,6 +339,88 @@ def plot_combined(all_plot_data, output_dir, filename="eps_trajectory_combined.p
     print(f"[plot] combined saved -> {out}")
 
 
+def read_proxy_csv(path):
+    """proxy_*.csv 에서 (steps, mean, std) 읽기. 형식: step,proxy_mean,proxy_std"""
+    steps, means, stds = [], [], []
+    with open(path) as f:
+        next(f, None)  # header
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) >= 2 and parts[0]:
+                try:
+                    steps.append(int(float(parts[0])))
+                    means.append(float(parts[1]) if parts[1] else float("nan"))
+                    stds.append(float(parts[2]) if len(parts) > 2 and parts[2] else 0.0)
+                except ValueError:
+                    continue
+    return np.array(steps), np.array(means), np.array(stds)
+
+
+def plot_overall(plot_root, num_tp, num_plot, out_name="memo_proxy_overall.png"):
+    """plot_num=N/ 아래 모든 plot 의 proxy curve 를 모아 overall mean ± std plot.
+    각 plot 의 csv/proxy_*.csv 에서 idx < num_tp → general(text), idx >= num_tp → memorized."""
+    import glob
+    text_curves, memo_curves = [], []
+    steps_ref = None
+    for k in range(num_plot):
+        csv_dir = os.path.join(plot_root, f"plot{k:02d}", "csv")
+        csvs = sorted(glob.glob(os.path.join(csv_dir, "proxy_*.csv")))
+        for idx, c in enumerate(csvs):
+            steps, mean, _ = read_proxy_csv(c)
+            if len(mean) == 0:
+                continue
+            if steps_ref is None:
+                steps_ref = steps
+            (text_curves if idx < num_tp else memo_curves).append(mean)
+
+    if steps_ref is None:
+        print("[plot] overall: 수집된 curve 없음 — skip")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    stats = {}
+    for label, curves, color in [("general", text_curves, "tab:blue"),
+                                 ("memorized", memo_curves, "tab:red")]:
+        if not curves:
+            stats[label] = None
+            continue
+        arr = np.array(curves)                  # (num_curves, steps)
+        m, s = arr.mean(axis=0), arr.std(axis=0)
+        stats[label] = (m, s)
+        ax.plot(steps_ref, m, color=color, linewidth=2.2, marker="o", markersize=3,
+                label=f"{label} mean (n={len(curves)})")
+        ax.fill_between(steps_ref, m - s, m + s, color=color, alpha=0.2,
+                        label=f"{label} ±1 std")
+    ax.set_xlabel("Denoising Step", fontsize=12)
+    ax.set_ylabel(r"memo_proxy  $\|\,\epsilon - \epsilon_s\,\|^2 / D$", fontsize=12)
+    ax.set_title(f"Overall memo_proxy (mean ± std across {num_plot} plots)", fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
+    plt.tight_layout()
+    _total_dir = os.path.join(plot_root, "total")
+    os.makedirs(_total_dir, exist_ok=True)
+    out_path = os.path.join(_total_dir, out_name)
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"[plot] overall mean±std -> {out_path}")
+
+    # 전체 평균/std csv → plot_num=N/total_csv/{general,memo}.csv
+    import csv as _csv
+    total_csv_dir = os.path.join(plot_root, "total", "total_csv")
+    os.makedirs(total_csv_dir, exist_ok=True)
+    _nan = np.full(len(steps_ref), np.nan)
+    for _name, _key in [("general.csv", "general"), ("memo.csv", "memorized")]:
+        _st = stats.get(_key)
+        _m, _s = _st if _st is not None else (_nan, _nan)
+        _cp = os.path.join(total_csv_dir, _name)
+        with open(_cp, "w", newline="") as _f:
+            _w = _csv.writer(_f)
+            _w.writerow(["step", "mean", "std"])
+            for _si, _a, _b in zip(steps_ref, _m, _s):
+                _w.writerow([int(_si), f"{_a:.6f}", f"{_b:.6f}"])
+        print(f"[csv]  overall -> {_cp}")
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Epsilon trajectory analysis for T2I memorization")
     # prompt sources
@@ -367,10 +450,14 @@ def parse_args():
     return p.parse_args()
 
 
-def load_prompts(path, n):
+def load_prompts(path, n, seed=42):
+    """파일에서 n 개 prompt 를 random sample (seed 로 재현 가능).
+    n 이 전체 줄 수 이상이면 전체를 그대로 반환."""
     with open(path) as f:
         ps = [line.strip() for line in f if line.strip()]
-    return ps[:n]
+    if n >= len(ps):
+        return ps
+    return random.Random(seed).sample(ps, n)
 
 
 def plot_snr(sd, output_dir, filename="snr_proxy.png"):
@@ -406,8 +493,9 @@ def main():
     device = torch.device(args.device)
 
     # load prompts: num_tp text + num_mtp memo, repeated for num_plot plots
-    text_all = load_prompts(args.text_dir, args.num_tp * args.num_plot)
-    memo_all = load_prompts(args.memo_dir, args.num_mtp * args.num_plot)
+    # random sample (재현 가능) — text/memo 각각 다른 seed 로 독립 추출
+    text_all = load_prompts(args.text_dir, args.num_tp * args.num_plot, seed=args.seed)
+    memo_all = load_prompts(args.memo_dir, args.num_mtp * args.num_plot, seed=args.seed + 1)
 
     # ---- Load model ----
     print("=" * 60)
@@ -429,9 +517,23 @@ def main():
         seed=args.seed,
     )
 
+    # plot_num=N 폴더 아래에 plot00, plot01 ... 저장
+    plot_root = os.path.join(args.output_dir, f"plot_num={args.num_plot}")
+    os.makedirs(plot_root, exist_ok=True)
+
+    # 이번 실행에 실제 사용된 prompt 목록 저장 → total/txt/
+    _total_txt = os.path.join(plot_root, "total", "txt")
+    os.makedirs(_total_txt, exist_ok=True)
+    with open(os.path.join(_total_txt, "gen_text.txt"), "w") as _f:
+        _f.write("\n".join(text_all) + "\n")
+    with open(os.path.join(_total_txt, "memo_text.txt"), "w") as _f:
+        _f.write("\n".join(memo_all) + "\n")
+    print(f"[prompt] 사용 general {len(text_all)}개, memo {len(memo_all)}개 "
+          f"-> {os.path.join(plot_root, 'total', 'txt')}/{{gen,memo}}_text.txt")
+
     for k in range(args.num_plot):
-        # each plot = one folder plot{k}/ with imgs/, npz/, csv/ + eps_trajectory_multi.png
-        plot_dir = os.path.join(args.output_dir, f"plot{k:02d}")
+        # each plot = one folder plot{k}/ under plot_num=N/ with imgs/, npz/, csv/
+        plot_dir = os.path.join(plot_root, f"plot{k:02d}")
         npz_dir = os.path.join(plot_dir, "npz")
         img_dir = os.path.join(plot_dir, "imgs")
         csv_dir = os.path.join(plot_dir, "csv")
@@ -449,6 +551,9 @@ def main():
             results = []
             for idx, prompt in enumerate(prompts):
                 print(f"[{idx+1}/{len(prompts)}] {prompt}")
+                _is_memo = idx in memo_indices
+                _prefix = "memo" if _is_memo else "gen"
+                _gidx = idx - len(cur_text) if _is_memo else idx
                 analyzer.generator.manual_seed(args.seed)
                 torch.manual_seed(args.seed)
                 res = analyzer.analyze_single(
@@ -464,7 +569,7 @@ def main():
                     eps_diff_sq=np.array(res["eps_diff_sq"]),
                     prompt=prompt,
                 )
-                save_image(res["img"].float(), os.path.join(img_dir, f"{idx:02d}.png"))
+                save_image(res["img"].float(), os.path.join(img_dir, f"{_prefix}_{_gidx:02d}_00.png"))
                 with open(os.path.join(csv_dir, f"proxy_{idx:02d}.csv"), "w") as _f:
                     _f.write("step,proxy_mean,proxy_std\n")
                     for _s, _v in zip(res["step_indices"], res["eps_diff_sq"]):
@@ -475,6 +580,9 @@ def main():
             multi_results = []
             for idx, prompt in enumerate(prompts):
                 print(f"[{idx+1}/{len(prompts)}] {prompt}  ({args.num_samples} seeds)")
+                _is_memo = idx in memo_indices
+                _prefix = "memo" if _is_memo else "gen"
+                _gidx = idx - len(cur_text) if _is_memo else idx
                 mr = analyzer.analyze_multi_sample(
                     prompt=prompt,
                     cfg_guidance=args.cfg_guidance,
@@ -491,7 +599,7 @@ def main():
                     prompt=prompt,
                 )
                 for s_idx, s in enumerate(mr["samples"]):
-                    save_image(s["img"].float(), os.path.join(img_dir, f"{idx:02d}_{s_idx:02d}.png"))
+                    save_image(s["img"].float(), os.path.join(img_dir, f"{_prefix}_{_gidx:02d}_{s_idx:02d}.png"))
                 with open(os.path.join(csv_dir, f"proxy_{idx:02d}.csv"), "w") as _f:
                     _f.write("step,proxy_mean,proxy_std\n")
                     for _s, _m, _sd in zip(mr["samples"][0]["step_indices"],
@@ -501,6 +609,9 @@ def main():
                               memo_indices=memo_indices)
         # SNR schedule plot (text & memo share the same schedule)
         plot_snr(analyzer, plot_dir)
+
+    # 전체 plot 통합: text(general) vs memo overall mean ± std → plot_num=N/memo_proxy_overall.png
+    plot_overall(plot_root, args.num_tp, args.num_plot)
 
     print(f"\nAll results saved to: {args.output_dir}")
 

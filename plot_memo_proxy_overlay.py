@@ -65,9 +65,12 @@ def collect_group(group_dir, num_tp):
     """
     memo_curves, text_curves = [], []
     steps_ref = None
-    plot_dirs = sorted(glob.glob(os.path.join(group_dir, "plot*")))
+    # 새 구조: group_dir/plot_num=N/plot*  (fallback: 과거 group_dir/plot*)
+    plot_dirs = sorted(glob.glob(os.path.join(group_dir, "plot_num=*", "plot*")))
     if not plot_dirs:
-        print(f"  [warn] no plot*/ dirs under {group_dir}")
+        plot_dirs = sorted(glob.glob(os.path.join(group_dir, "plot*")))
+    if not plot_dirs:
+        print(f"  [warn] no plot_num=*/plot*/ (또는 plot*/) dirs under {group_dir}")
     for pd in plot_dirs:
         csvs = sorted(glob.glob(os.path.join(pd, "csv", "proxy_*.csv")))
         for idx, c in enumerate(csvs):

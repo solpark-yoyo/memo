@@ -21,6 +21,25 @@ from latent_diffusion import StableDiffusion
 from utils_local.log_util import set_seed
 from torchvision.utils import save_image
 
+
+def cfg_eff_at(sd, step_idx, cfg):
+    """Staged CFG: denoising 초반(step_idx < cfg_start_ratio * NFE)은 null(unconditional)만
+    사용하고, 그 이후 step부터 정상 CFG 계수를 적용.
+
+      cfg_start_ratio = 0.0  →  항상 정상 CFG (기존 동작, opt-in 아님)
+      cfg_start_ratio = 0.3  →  step 0~int(0.3*NFE)-1 까지 eps = noise_uc (null 만),
+                                 그 이후 step 부터 eps = noise_uc + cfg·(noise_c - noise_uc)
+
+    step_idx 기준:
+      - DDIM forward/reference 의 eps_theta → 현재 denoising step_idx
+      - memo proxy 의 eps_s(x_s, s_target)  → s_target 의 인덱스 s_idx
+    """
+    ratio = getattr(sd, "cfg_start_ratio", 0.0) or 0.0
+    if ratio <= 0:
+        return cfg
+    total = len(sd.scheduler.timesteps)
+    return 0.0 if step_idx < int(total * ratio) else cfg
+
 MEMO_PROMPTS = {
     "astronaut_on_the_moon":  "An astronaut on the moon",
     "captain_marvel":         "Captain Marvel Exclusive Ccxp Poster Released Online By Marvel",
@@ -28,7 +47,26 @@ MEMO_PROMPTS = {
 }
 
 
-def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align):
+def compute_memo_loss(memo_proxy, type_memo_loss="minimization", memo_threshold=0.0):
+    """memo_proxy: (B,) per-sample memorization proxy = ||ε_ref - ε_s||²/D.
+
+    스칼라 loss 반환 (MINIMIZE → memorization 완화).
+
+    type_memo_loss:
+      - "minimization": loss = mean(proxy)
+          proxy 전체를 낮춘다 (기존 동작).
+      - "threshold":    loss = mean(relu(proxy - memo_threshold))
+          proxy > memo_threshold 인 샘플/구간만 gradient 를 흘린다.
+          proxy ≤ memo_threshold 이면 loss=0 → 해당 부분은 update 하지 않음
+          (memo_proxy 가 이미 충분히 작으면 더 이상 밀지 않음).
+    """
+    if type_memo_loss == "threshold":
+        return torch.clamp(memo_proxy - memo_threshold, min=0.0).mean()
+    return memo_proxy.mean()
+
+
+def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
+                type_memo_loss="minimization", memo_threshold=0.0):
     """Optimize x_T by applying gradient at [init_steps, init_steps+gap_steps, ...]"""
 
     # ---- fp32 전환: gradient가 10~19 UNet chain을 생존하도록 ----
@@ -63,7 +101,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
             at = sd.alpha(t)
             at_prev = sd.alpha(t - sd.skip)
             noise_uc, noise_c = sd.predict_noise(zt_ref, t, uc, c)
-            eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+            eps_theta = noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
 
             x0_hat = (zt_ref - (1 - at).sqrt() * eps_theta) / at.sqrt() # Tweedie formula
 
@@ -87,7 +125,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
             at = sd.alpha(t)
             at_prev = sd.alpha(t - sd.skip)
             noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
-            eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+            eps_theta = noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
             x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
             zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta # DDIM denoising step
             if step_idx == t_idx:
@@ -102,7 +140,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
         # x_T.detach() 안 하면 x_s→x_T shortcut gradient 생겨서 trajectory 의미 없어짐.
         x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * x_T.detach().to(sd.dtype)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
-        eps_s = noise_uc_s + cfg * (noise_c_s - noise_uc_s)
+        eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
 
         # memo proxy = ||ε - eps_s||² / D, batch-safe (eps_trajectory.py:115-116 과 동일)
         # reshape(B,-1).pow(2).mean(-1) → 샘플별 (B,) proxy; .mean() 으로 스칼라 loss
@@ -112,7 +150,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
         # 완화 목적: memo_proxy를 MINIMIZE.
         # 실측(eps_trajectory plot)에서 memorized prompt일수록 proxy가 큼(ε을 무시하고
         # memorized 방향 eps_s를 뱉기 때문). ∴ proxy↓ = 정상 denoiser(eps_s→ε)로 회귀 = 완화.
-        loss_memo = memo_proxy.mean()   # 스칼라: batch 평균 (최소화 → 완화)
+        loss_memo = compute_memo_loss(memo_proxy, type_memo_loss, memo_threshold)
 
         # text alignment loss: keep x̂₀ close to original trajectory (MSE, batch-safe)
         loss_align = (x0_hat.float() - x0_orig_refs[t_idx]).reshape(x0_hat.shape[0], -1).pow(2).mean(-1).mean()
@@ -148,7 +186,8 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                      init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
                      adjoint_normalize=False, adjoint_fd_fallback=False, fd_eps=1e-3,
                      cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1,
-                     record_dir=None):
+                     record_dir=None,
+                     type_memo_loss="minimization", memo_threshold=0.0):
     """
     AdjointDPM version of optimize_xT.
 
@@ -232,15 +271,15 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
             at = sd.alpha(t)
             at_prev = sd.alpha(t - sd.skip)
             noise_uc, noise_c = sd.predict_noise(zt_ref, t, uc, c)
-            eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+            eps_theta = noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
             x0_hat = (zt_ref - (1 - at).sqrt() * eps_theta) / at.sqrt()
             zt_ref = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
             if step_idx in update_indices:
                 x0_orig_refs[step_idx] = x0_hat.detach().clone().float()
 
-    def cfg_combine(noise_uc, noise_c):
-        """CFG combination — identical to original line 87."""
-        return noise_uc + cfg * (noise_c - noise_uc)
+    def cfg_combine(noise_uc, noise_c, step_idx):
+        """CFG combination with staged CFG (cfg_eff_at). step_idx = denoising step index."""
+        return noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
 
     # ================================================================
     # (B) OPTIMIZATION LOOP — adjoint replaces loss.backward()
@@ -281,7 +320,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                 at = sd.alpha(t)
                 at_prev = sd.alpha(t - sd.skip)
                 noise_uc, noise_c = sd.predict_noise(x_k, t, uc, c)
-                eps_theta = cfg_combine(noise_uc, noise_c)
+                eps_theta = cfg_combine(noise_uc, noise_c, step_idx)
                 x0_hat = (x_k - (1 - at).sqrt() * eps_theta) / at.sqrt()
                 x_k = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
                 if step_idx == t_idx:
@@ -328,7 +367,8 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
             # UNet call #1 (grad): CFG noise at the break timestep for Tweedie.
             # predict_noise is NOT decorated @no_grad, so grad flows here.
-            eps_t = cfg_combine(*sd.predict_noise(x_end, t_break, uc, c))
+            _nu_t, _nc_t = sd.predict_noise(x_end, t_break, uc, c)
+            eps_t = cfg_combine(_nu_t, _nc_t, t_idx)
             x0_hat = (x_end - (1 - at_break).sqrt() * eps_t) / at_break.sqrt()
 
             # x_s with DETACHED ε_ref (identical to original line 100).
@@ -337,17 +377,19 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
             # UNet call #2 (grad): CFG noise at s_target for the memo proxy.
             noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
-            eps_s = cfg_combine(noise_uc_s, noise_c_s)
+            eps_s = cfg_combine(noise_uc_s, noise_c_s, s_idx)
 
             # ---- memo proxy & losses — IDENTICAL formulas to original ----
             B = eps_s.shape[0]
             memo_proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean(-1)
-            loss_memo = memo_proxy.mean()
+            loss_memo = compute_memo_loss(memo_proxy, type_memo_loss, memo_threshold)
             loss_align = ((x0_hat.float() - x0_orig_refs[t_idx])
                           .reshape(x0_hat.shape[0], -1).pow(2).mean(-1).mean())
             loss = loss_memo + lambda_align * loss_align
 
-            print(f"memo_proxy(↓=mitigate): {memo_proxy.mean().item():.6f}  "
+            _loss_tag = (f"[memo_loss={type_memo_loss},τ={memo_threshold}]"
+                         if type_memo_loss == "threshold" else "[memo_loss=minimization]")
+            print(f"{_loss_tag} proxy(↓=mitigate): {memo_proxy.mean().item():.6f}  "
                   f"loss_memo: {loss_memo.item():.6f}  loss_align: {loss_align.item():.6f}")
 
             # ---- record: 매 update step마다 batch(=seed)별 latent 누적 + loss.csv append ----
@@ -428,15 +470,18 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                         # NOTE: this is a single-sample (high-variance) estimate;
                         # default off, prefer the exact autograd path below.
                         v   = torch.randn_like(x_j_local)
-                        e_p = cfg_combine(*sd.predict_noise(x_j_local + fd_eps * v, t_j, uc, c))
-                        e_m = cfg_combine(*sd.predict_noise(x_j_local - fd_eps * v, t_j, uc, c))
+                        _nu_p, _nc_p = sd.predict_noise(x_j_local + fd_eps * v, t_j, uc, c)
+                        e_p = cfg_combine(_nu_p, _nc_p, j)
+                        _nu_m, _nc_m = sd.predict_noise(x_j_local - fd_eps * v, t_j, uc, c)
+                        e_m = cfg_combine(_nu_m, _nc_m, j)
                         Jv  = (e_p - e_m) / (2 * fd_eps)          # estimate of J·v
                         Jt_g = Jv * (g * v).sum()                 # J·v · (vᵀg), shape of x
                     else:
                         # Exact VJP: J_jᵀ · g via reverse-mode autograd.
                         # CFG-combined noise so the VJP captures
                         # J_uc + cfg·(J_c - J_uc) automatically.
-                        eps_j = cfg_combine(*sd.predict_noise(x_j_local, t_j, uc, c))
+                        _nu_j, _nc_j = sd.predict_noise(x_j_local, t_j, uc, c)
+                        eps_j = cfg_combine(_nu_j, _nc_j, j)
                         Jt_g = torch.autograd.grad(eps_j, x_j_local,
                                                    grad_outputs=g,
                                                    retain_graph=False)[0]
@@ -527,7 +572,7 @@ def _recompute_to(sd, x_T, timesteps, k, uc, c, cfg, init_noise_sigma):
         at = sd.alpha(t)
         at_prev = sd.alpha(t - sd.skip)
         noise_uc, noise_c = sd.predict_noise(x, t, uc, c)
-        eps = noise_uc + cfg * (noise_c - noise_uc)
+        eps = noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
         x0h = (x - (1 - at).sqrt() * eps) / at.sqrt()
         x = at_prev.sqrt() * x0h + (1 - at_prev).sqrt() * eps
     return x.clone()
@@ -586,7 +631,7 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
         x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
                + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
-        eps_s = noise_uc_s + cfg * (noise_c_s - noise_uc_s)
+        eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
         B = eps_s.shape[0]
         memo_proxy = (epsilon_ref - eps_s).reshape(B, -1).pow(2).mean(-1)   # (B,)
         memo_proxy_per_step.append(memo_proxy.float().cpu().numpy())
@@ -647,6 +692,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--NFE", type=int, default=50)
     p.add_argument("--cfg", type=float, default=7.5)
+    p.add_argument("--cfg_start_ratio", type=float, default=0.0,
+                   help="denoising step 중 CFG 적용 시작 ratio. "
+                        "step_idx < ratio*NFE 동안은 null(unconditional)만 사용하고, "
+                        "그 이후 step부터 정상 CFG. 0.0 = 항상 CFG (기존 동작). 예: 0.3 = 초반 30%% null")
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--init_steps", type=int, default=10,
                    help="DDIM steps before first gradient update")
@@ -657,6 +706,13 @@ def main():
     p.add_argument("--base_s_ratio", type=float, default=0.5)
     p.add_argument("--lambda_align", type=float, default=0.1,
                    help="Weight for text alignment regularization")
+    p.add_argument("--type_memo_loss", type=str, default="minimization",
+                   choices=["minimization", "threshold"],
+                   help="minimization: loss=mean(proxy) 전체 완화 | "
+                        "threshold: loss=mean(relu(proxy-τ)), proxy>τ 일 때만 grad 흘림")
+    p.add_argument("--memo_threshold", type=float, default=0.3,
+                   help="τ for type_memo_loss=threshold (memo_proxy=||ε-ε_s||²/D 스케일; "
+                        "memorized proxy 전형적으로 ~0.1-0.5, 모델/prompt 마다 튜닝)")
     p.add_argument("--base_seed", type=int, default=42)
     p.add_argument("--num_seeds", type=int, default=5,
                    help="images per prompt (different seed each)")
@@ -680,9 +736,14 @@ def main():
     solver_config = munchify({"num_sampling": args.NFE})
     sd = StableDiffusion(solver_config=solver_config, model_key=args.model_key, device=device, seed=args.base_seed)
     sd.unet.enable_gradient_checkpointing()
+    sd.cfg_start_ratio = args.cfg_start_ratio   # staged CFG: 초반 ratio*NFE step 동안 null 만, 이후 정상 CFG
 
     update_steps = [args.init_steps + i * args.gap_steps for i in range(args.num_steps)]
-    print(f"NFE={args.NFE} CFG={args.cfg} lr={args.lr} update_steps={update_steps}")
+    _cfg_n = int(args.NFE * args.cfg_start_ratio) if args.cfg_start_ratio > 0 else 0
+    print(f"NFE={args.NFE} CFG={args.cfg} cfg_start_ratio={args.cfg_start_ratio} "
+          f"(step 0~{_cfg_n-1} null-only) lr={args.lr} update_steps={update_steps}")
+    print(f"type_memo_loss={args.type_memo_loss} "
+          + (f"memo_threshold={args.memo_threshold}" if args.type_memo_loss == "threshold" else "(full minimization)"))
     print(f"prompt_dir={args.prompt_dir} num_samples={args.num_samples} num_seeds(per prompt)={args.num_seeds}")
 
     # SNR schedule summary (where Tweedie x0_hat becomes signal-bearing)
@@ -734,6 +795,8 @@ def main():
             args.base_s_ratio, args.lambda_align,
             batch_size=args.num_seeds,
             record_dir=record_dir,
+            type_memo_loss=args.type_memo_loss,
+            memo_threshold=args.memo_threshold,
         )
         print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
 

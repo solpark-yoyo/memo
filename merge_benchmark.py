@@ -118,12 +118,24 @@ def read_sscd_gt(path):
 
 
 def collect_metrics(metric_dir):
-    """Collect all metrics from a metric directory."""
+    """Collect all metrics from a metric directory.
+    chen_ 접두 파일(t2i/sscd/prdc/vendi)도 fallback 으로 읽는다."""
+    def _first(*names):
+        for n in names:
+            p = os.path.join(metric_dir, n)
+            if os.path.exists(p):
+                return p
+        return None
+
     result = OrderedDict()
-    result.update(read_t2i(os.path.join(metric_dir, "t2i_metrics.csv")))
-    result.update(read_sscd_gt(os.path.join(metric_dir, "sscd_gt_metrics.csv")))
-    result.update(read_prdc(os.path.join(metric_dir, "prdc_metrics.csv")))
-    result.update(read_vendi(os.path.join(metric_dir, "vendi_metrics.csv")))
+    p = _first("t2i_metrics.csv", "chen_t2i_metrics.csv")
+    if p: result.update(read_t2i(p))
+    p = _first("sscd_gt_metrics.csv", "chen_sscd_gt_metrics.csv")
+    if p: result.update(read_sscd_gt(p))
+    p = _first("prdc_metrics.csv", "chen_prdc_metrics.csv")
+    if p: result.update(read_prdc(p))
+    p = _first("vendi_metrics.csv", "chen_vendi_metrics.csv")
+    if p: result.update(read_vendi(p))
     return result
 
 

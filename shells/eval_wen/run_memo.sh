@@ -44,6 +44,11 @@ for lr in "${lr_list[@]}"; do
     base_s_ratio=0.5
     # lr=0.08
     lambda_align=0.00
+    cfg_start_ratio=0.0  # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG (0.0=항상 CFG)
+    type_memo_loss="minimization"  # memo loss 유형: minimization | threshold
+    memo_threshold=0.3  # type_memo_loss=threshold 일 때만 사용
+    # memothr 세그먼트는 threshold 모드일 때만 dir 에 포함 (minimization 이면 빈 문자열)
+    if [[ "${type_memo_loss}" == "threshold" ]]; then memothr_dir="memothr=${memo_threshold}/"; else memothr_dir=""; fi
     init_opti_prompt_dir="examples/assets/${text_name}"
 
     t2i_prompt_dir="examples/assets/${text_name}"
@@ -69,7 +74,7 @@ for lr in "${lr_list[@]}"; do
 
     ddim_dir="${base_dir}/ddim/${cfg_nfe_ddim}/seed=${seed}"
     cno_dir="${base_dir}/cno_infoNCE/${cfg_nfe_cno}/temp=${infoNCE_temp}_win=${window_size}_gamma=${gamma}_iter=${iopt_iter}/seed=${seed}"
-    init_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/lr=${lr}/seed=${seed}/batch=${b_size}"
+    init_dir="${base_dir}/init_opti/${cfg_nfe_init}/cfgsr=${cfg_start_ratio}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/memoloss=${type_memo_loss}/${memothr_dir}init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/lr=${lr}/seed=${seed}/batch=${b_size}"
 
     ddim_eval="${ddim_dir}/eval"
     cno_eval="${cno_dir}/eval"
@@ -110,6 +115,7 @@ for lr in "${lr_list[@]}"; do
         --model_key ${model_key} \
         --init_steps ${init_steps} --num_steps ${num_opt_steps} --gap_steps ${gap_steps} \
         --base_s_ratio ${base_s_ratio} --lambda_align ${lambda_align} \
+        --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold} \
         --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
         --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
         --device cuda:${gpu} --output_dir ${init_dir}
@@ -176,7 +182,7 @@ done
 # =========================== 8. [Trade-off CSV + Plot] ===========================
 # gap_steps 단계 아래 plot/ 폴더: trd/ (curve png), csv/ (tradeoff.csv)
 # memorization method(init_opti)만 비교 (DDIM/CNO 등 baseline 제외), lr 표시 없음.
-plot_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/plot"
+plot_dir="${base_dir}/init_opti/${cfg_nfe_init}/cfgsr=${cfg_start_ratio}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/memoloss=${type_memo_loss}/${memothr_dir}init=${init_steps}/nsteps=${num_opt_steps}/gap=${gap_steps}/plot"
 mkdir -p ${plot_dir}/trd ${plot_dir}/csv
 
 echo "================== [INFO]: Collect T2I-SSCD trade-off (lr별 분할 포함) =================="

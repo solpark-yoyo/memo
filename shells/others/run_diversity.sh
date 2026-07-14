@@ -37,6 +37,10 @@ lr=0.01
 base_s_ratio=0.5
 lambda_align=0.1
 init_opti_prompt_dir="examples/assets/coco_v2.txt"
+cfg_start_ratio=0.0                              # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG. 0.0=항상 CFG
+type_memo_loss="minimization"                    # minimization | threshold
+memo_threshold=0.3                               # type_memo_loss=threshold 일 때만 사용
+if [[ "${type_memo_loss}" == "threshold" ]]; then memothr_dir="memothr=${memo_threshold}/"; else memothr_dir=""; fi
 
 # d. Eval config
 prdc_real_dir="datasets/ms_coco/resize/val2014_512"
@@ -65,7 +69,7 @@ cfg_nfe_init="CFG=${cfg_init_opti}_NFE=${NFE}"
 
 ddim_dir="${base_dir}/ddim/${cfg_nfe_ddim}/seed=${seed}"
 cno_dir="${base_dir}/cno_infoNCE/${cfg_nfe_cno}/temp=${infoNCE_temp}_win=${window_size}_gamma=${gamma}_iter=${iopt_iter}/seed=${seed}"
-init_dir="${base_dir}/init_opti/${cfg_nfe_init}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/init=${init_steps}_nsteps=${num_opt_steps}_gap=${gap_steps}_lr=${lr}/seed=${seed}/batch=${b_size}"
+init_dir="${base_dir}/init_opti/${cfg_nfe_init}/cfgsr=${cfg_start_ratio}/base_s_ratio=${base_s_ratio}_lambda_align=${lambda_align}/memoloss=${type_memo_loss}/${memothr_dir}init=${init_steps}_nsteps=${num_opt_steps}_gap=${gap_steps}_lr=${lr}/seed=${seed}/batch=${b_size}"
 
 echo "${ddim_dir}"
 echo "${cno_dir}"
@@ -90,7 +94,8 @@ echo "${init_dir}"
 #     --base_s_ratio ${base_s_ratio} --lambda_align ${lambda_align} \
 #     --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
 #     --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
-#     --device cuda:${gpu} --output_dir ${init_dir}
+#     --device cuda:${gpu} --output_dir ${init_dir} \
+#     --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold}
 
 # # =========================== 5. [Eval: DDIM] ===========================
 # echo "================== [INFO]: Eval [DDIM] =================="

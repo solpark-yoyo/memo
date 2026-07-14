@@ -15,11 +15,11 @@
 #       bash shells/others/run_memo_proxy_compare.sh
 #  (빠른 smoke-test: SMOKE=1 bash shells/others/run_memo_proxy_compare.sh)
 # ===================================================================
-set -euo pipefail
+# set -euo pipefail
 
 # ---- conda 환경 (div_DM) ----
-source /home/geonsoo/anaconda3/etc/profile.d/conda.sh
-conda activate div_DM
+# source /home/geonsoo/anaconda3/etc/profile.d/conda.sh
+# conda activate div_DM
 
 # ---- Config (환경변수로 오버라이드 가능) ----
 gpu="${GPU:-0}"
@@ -31,7 +31,7 @@ DEVICE="cuda:${gpu}"
 
 num_tp="${NUM_TP:-3}"       # coco general prompts per plot
 num_mtp="${NUM_MTP:-1}"     # memo prompts per plot
-num_plot="${NUM_PLOT:-20}"  # 비교 plot 개수
+num_plot="${NUM_PLOT:-5}"  # 비교 plot 개수
 
 # SMOKE=1: 빠른 검증용 기본값 (명시되지 않은 환경변수에 한해서만 적용)
 #   예) SMOKE=1 BATCH=5  -> batch=5, num_tp=2, num_plot=1
@@ -44,7 +44,8 @@ fi
 num_samples=${batch}
 
 # ---- Paths ----
-MODEL="ckpt/stable-diffusion-v1-4"                       # SD1.4 (비-memorized)
+MODEL="ckpt/stable-diffusion-v1-4"                       # SD1.4 (비-memorized, Chen 용)
+WEN_MODEL="ckpt/sd14_memor_LAION2B_40k"                  # Wen et al. memorized SD
 TEXT_DIR="examples/assets/coco_v2.txt"                   # general prompt
 CHEN_MEMO="examples/assets/cvpr2025_memo_prompt.txt"     # Chen et al. memorized
 WEN_MEMO="examples/assets/new_memorized_text_prompt.txt" # Wen et al. memorized
@@ -82,7 +83,7 @@ python eps_trajectory.py \
 echo ""
 echo "############ [2/3] Wen (new_memorized_text_prompt) -> ${WEN_OUT} ############"
 python eps_trajectory.py \
-    --model_key "${MODEL}" \
+    --model_key "${WEN_MODEL}" \
     --text_dir "${TEXT_DIR}" --memo_dir "${WEN_MEMO}" \
     --output_dir "${WEN_OUT}" \
     --num_tp ${num_tp} --num_mtp ${num_mtp} --num_plot ${num_plot} \
