@@ -7,7 +7,7 @@ step s compute the normalized Tweedie-gap proxy
     proxy(s) = || eps_ref - eps_s ||^2 / D   (D = noise dim = 4*64*64)
 
 where
-    eps_ref = x_T   (fixed injected noise, detached)
+    eps_ref = randn_like(x_T)   (fresh random, x_T 와 독립; x_s forward noise 는 x_T 유지)
     eps_s   = eps_theta(x_s, s)   with CFG
     x_s     = sqrt(alpha_s) * x0_hat(s) + sqrt(1-alpha_s) * x_T
     x0_hat(s) = Tweedie estimate of x0 at step s
@@ -97,7 +97,7 @@ def main():
 
     # one initial noise per prompt
     x_T = torch.randn(B, 4, 64, 64, device=device, dtype=torch.float32)
-    eps_ref = x_T
+    eps_ref = torch.randn_like(x_T)   # proxy reference (fresh random, x_T 와 독립)
     D = eps_ref[0].numel()  # noise dim = 4 * 64 * 64
 
     zt = x_T.to(sd.dtype) * init_noise_sigma

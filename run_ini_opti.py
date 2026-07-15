@@ -110,9 +110,11 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
                 x0_orig_refs[step_idx] = x0_hat.detach().clone().float()
 
     total_loss = 0.0
-    # ε reference = 최적화 전 원본 noise로 고정 (eps_trajectory.py:74 구조와 동일)
+    # ε reference = x_T 와 독립인 fresh random noise (proxy reference).
+    # x_s forward noise 는 여전히 x_T.detach() (아래 x_s 식) — forward consistency 유지.
+    # reference 가 x_T 이면 proxy 가 self-referential 로 항상 0 으로 수렴 → memorization 신호 무의미.
     # 루프 밖에서 한 번만 정의 → 4번의 update 동안 변하지 않음
-    epsilon_ref = x_T_init.detach()
+    epsilon_ref = torch.randn_like(x_T_init)
 
     for ui, t_idx in enumerate(update_indices):
         # print(f"t_idx: {t_idx}")
@@ -285,8 +287,9 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     # (B) OPTIMIZATION LOOP — adjoint replaces loss.backward()
     # ================================================================
     total_loss = 0.0
-    # ε reference = 최적화 전 원본 noise로 고정 (4번 update 동안 변하지 않음)
-    epsilon_ref = x_T_init.detach()
+    # ε reference = x_T 와 독립인 fresh random noise (proxy reference; 4번 update 동안 고정).
+    # x_s forward noise 는 x_T.detach() (아래 x_s 식) 로 forward consistency 유지.
+    epsilon_ref = torch.randn_like(x_T_init)
 
     # ---- record setup: batch(=seed)별 폴더 + update-step 누적 리스트 ----
     # 구조: record/img_PPPP/img_PPPP_BB/{grid.png, loss.csv}
@@ -599,12 +602,13 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
     """x_T opti 종료 후 DDIM sampling 하며 모든 denoising step 에서 memo_proxy 수집.
 
     memo_proxy(t) = || ε_ref - ε_s(x_s(t), s) ||^2 / D
-      - ε_ref = 최적화된 x_T (DDIM 입력 noise)
+      - ε_ref = fresh random noise (x_T 와 독립) — proxy reference
       - x̂₀|t  = Tweedie(x_t, t)
-      - x_s    = √ᾱ_s · x̂₀|t + √(1-ᾱ_s) · ε_ref,  s = 고정 mid-noise (base_s_ratio)
+      - x_s    = √ᾱ_s · x̂₀|t + √(1-ᾱ_s) · x_T_noise,  s = 고정 mid-noise (base_s_ratio)
+                 (x_T_noise = 최적화된 x_T, DDIM 입력 noise — forward consistency 유지)
       - ε_s    = ε_θ(x_s, s)
-    denoising 이 진행될수록 x̂₀|t → x₀ 이므로 x_s → true forward, ε_s → ε_ref.
-    ∴ memo_proxy 는 단조 감소 경향(= memorization 완화)을 보여야 함.
+    ε_ref 가 x_T 와 독립이므로 self-referential 0-수렴이 없고, ε_s 가 memorized
+    direction 으로 쏠릴수록 proxy 가 커짐 → memorization 신호.
 
     batch(= num_seeds) 차원으로 mean ± std 를 계산해 plot + csv → record_dir/.
     """
@@ -614,7 +618,8 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
     s_target = timesteps[s_idx]
     alpha_s = sd.alpha(s_target)
 
-    epsilon_ref = x_T.detach().to(sd.dtype)        # 최적화된 x_T = DDIM 입력 noise
+    x_T_noise = x_T.detach().to(sd.dtype)             # 최적화된 x_T = DDIM 입력 noise (x_s forward 용)
+    epsilon_ref = torch.randn_like(x_T).to(sd.dtype)  # proxy reference (fresh random, x_T 와 독립)
     zt = x_T.to(sd.dtype) * sd.scheduler.init_noise_sigma
 
     step_indices = []
@@ -629,7 +634,7 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
 
         # ---- memo proxy at this step (eps_trajectory.py:107-116 과 동일) ----
         x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
-               + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref)
+               + (1 - alpha_s).sqrt().to(sd.dtype) * x_T_noise)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
         eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
         B = eps_s.shape[0]

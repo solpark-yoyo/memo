@@ -384,3 +384,21 @@ Text prompt => plot proxy
 Try early init_step optimization (scale up)
 
 - Trade off curve
+
+
+# 260715(Thr)
+
+Code 구현상의 문제는 없었다. 단지 nsteps, init_step 중 한가지 혹인 2가지의 이유로 
+Memo-T2I trade-off 관계가 잘 보이지가 않았다. 현재 nsteps=10에서 trade-off curve가 잘 들어난다.
+
+성능을 올리기 위해서 cfg deferring ratio와 threshold loss 를 도입했다.
+cfg deferring rattio를 도입하니 cfgsr=0.10까지 성능 향상이 이루어졌다.ㅎ하지만 baseline을 이기지는 못했다.
+그래서 threshold loss framework를 해보니 eps_threshold=0.3기준으로 baseline을 이기는 일부 region이 존재했다.
+
+결국 미팅 후에 교수님과 내가 느낀 점은 아래 2가지다.
+[1] Performance: Baseline을 이겨야 한다.
+[2] Cost: 하지만 우리 method가 cost를 너무 많이 먹는다. 
+
+ps. Accumulate loss 사용비교, sd14로 평가메트릭 재측정, 
+
+먼저 Perf 에서는 
