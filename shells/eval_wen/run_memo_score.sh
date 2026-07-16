@@ -6,14 +6,14 @@
 #  conda env: div_DM (inference + eval 동일 env 사용)
 #    bash shells/run_memo_score.sh
 # ===================================================================
-# PY="/home/geonsoo/anaconda3/envs/div_DM/bin/python"
+# python 은 PATH 의 것 사용 (conda activate 또는 docker 의 python)
 
 # =========================== 1. [Config] ===========================
 gpu=0
 NFE=50
 cfg_initnoise=7.5
 seed=42
-num_samples=15
+num_samples=10
 batch=5
 num_images_per_prompt=${batch}
 target_loss=0.9

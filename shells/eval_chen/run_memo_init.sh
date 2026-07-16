@@ -17,12 +17,13 @@ NFE=50 # Test
 cfg_ddim=7.5
 cfg_cno=6.0
 cfg_init_opti=7.5
-cfg_start_ratio=0.0  # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG (0.0=항상 CFG)
-type_memo_loss="minimization"  # memo loss 타입: minimization | threshold
-memo_threshold=0.3  # type_memo_loss=threshold 일 때만 사용되는 임계값
+cfg_start_ratio=0.10           # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG. 0.0=항상 CFG
+type_memo_loss="minimization" # memo loss 타입: minimization | threshold
+memo_threshold=0.3            # type_memo_loss=threshold 일 때만 사용되는 임계값
+grad_prcd_flag=""; [[ "${GRAD_PRCD:-0}" == "1" ]] && grad_prcd_flag="--grad_prcd"  # GPER gradient preconditioning (arXiv:2602.08646)
 if [[ "${type_memo_loss}" == "threshold" ]]; then memothr_dir="memothr=${memo_threshold}/"; else memothr_dir=""; fi
 seed=42
-num_samples=20
+num_samples=10
 num_images_per_prompt=5
 b_size=${num_images_per_prompt}
 text_name="cvpr2025_memo_prompt.txt"
@@ -35,14 +36,15 @@ window_size=16
 gamma=1.0
 
 lr_list=(0.00 0.02 0.04 0.06 0.08)
-num_opt_steps_list=(1 3 5 7 10)
+# lr_list=(0.00)
+init_steps_list=(1 3 5 7 10)
 
-for num_opt_steps in "${num_opt_steps_list[@]}"; do
+for init_steps in "${init_steps_list[@]}"; do
     for lr in "${lr_list[@]}"; do
-        echo "==================== num_opt_steps=${num_opt_steps} =========================="
+        echo "==================== init_steps=${init_steps} =========================="
         echo "==================== lr=${lr} =========================="
-        init_steps=5 # IMPOTANT
-        # num_opt_steps=2
+        # init_steps=5 # IMPOTANT
+        num_opt_steps=2
         gap_steps=3
         base_s_ratio=0.5
         # lr=0.08
@@ -113,10 +115,10 @@ for num_opt_steps in "${num_opt_steps_list[@]}"; do
             --model_key ${model_key} \
             --init_steps ${init_steps} --num_steps ${num_opt_steps} --gap_steps ${gap_steps} \
             --base_s_ratio ${base_s_ratio} --lambda_align ${lambda_align} \
+            --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold} ${grad_prcd_flag} \
             --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
             --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
-            --device cuda:${gpu} --output_dir ${init_dir} \
-            --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold}
+            --device cuda:${gpu} --output_dir ${init_dir}
 
         # # =========================== 5. [Eval: DDIM] ===========================
         # echo "================== [INFO]: Eval [DDIM] → ${ddim_eval}/ =================="
@@ -135,7 +137,7 @@ for num_opt_steps in "${num_opt_steps_list[@]}"; do
         # echo "  [CHECK] eval files:"
         # /bin/ls ${ddim_eval}/*.csv 2>/dev/null
 
-        # # =========================== 6. [Eval: CNO] ===========================
+        # =========================== 6. [Eval: CNO] ===========================
         # echo "================== [INFO]: Eval [CNO] → ${cno_eval}/ =================="
         # mkdir -p ${cno_eval}
         # python compute_sscd_gt.py \

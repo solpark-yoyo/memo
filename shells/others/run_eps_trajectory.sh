@@ -31,8 +31,7 @@ text_dir="examples/assets/coco_v2.txt"
 memo_dir="examples/assets/memorized_prompts_membench.txt"
 
 # ---- Paths ----
-ROOT_DIR="/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo"
-PYTHON="/home/geonsoo/anaconda3/bin/python"
+# ori_memo/ 에서 실행 가정; 다른 위치(예: docker)면 ROOT_DIR 로 override. python 은 PATH 의 것 사용.
 
 echo "========================================="
 echo "  Epsilon Trajectory Analysis"
@@ -42,7 +41,7 @@ echo "  text_dir=${text_dir}"
 echo "  memo_dir=${memo_dir}"
 echo "========================================="
 
-cd "${ROOT_DIR}"
+cd "${ROOT_DIR:-.}"
 
 python eps_trajectory.py \
     --num_inference_steps ${NFE} \

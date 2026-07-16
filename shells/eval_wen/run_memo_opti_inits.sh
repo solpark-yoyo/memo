@@ -1,11 +1,15 @@
 #!/bin/bash
 # ===================================================================
 #  Memorization Benchmark (Wen et al. ICLR 2024 eval 기준)
-#  DDIM vs CNO(infoNCE) vs init_opti
+#  DDIM vs CNO(infoNCE) vs init_opti — init_step=5 고정, lr sweep 버전
 #
+#  ★ run_memo.sh 기반. init_opti 의 init_steps=5 를 고정하고 lr 만 sweep.
 #  Metrics: SSCD-to-GT + T2I → {method_dir}/eval/
 #  Compute: elapsed_time, per_sample_time, peak_vram → {method_dir}/comp/
 #  Reference: datasets/wen2024_memorized/ (Wen et al. 공개 GT)
+#
+#  환경: conda div_DM (실행 전 activate)
+#  실행: ori_memo/ 디렉토리에서  bash shells/eval_wen/run_memo_init5_lr.sh
 # ===================================================================
 # set -euo pipefail
 
@@ -30,19 +34,14 @@ infoNCE_temp=0.1
 window_size=16
 gamma=1.0
 
-lr_list=(0.00 0.02 0.04 0.06 0.08)
-# lr_list=(0.02)
-# init_steps_list=(10 15 20 15)
+lr_list=(0.02 0.04 0.06 0.08)
 
 for lr in "${lr_list[@]}"; do
-# for init_steps in "${init_steps_list[@]}"; do
-    echo "==================== init_steps=${init_steps} =========================="
     echo "==================== lr=${lr} =========================="
-    init_steps=5 # IMPOTANT
-    num_opt_steps=2
+    init_steps=5 # IMPOTANT  ★ init_step=5 고정
+    num_opt_steps=5
     gap_steps=3
     base_s_ratio=0.5
-    # lr=0.08
     lambda_align=0.00
     cfg_start_ratio=0.0  # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG (0.0=항상 CFG)
     type_memo_loss="minimization"  # memo loss 유형: minimization | threshold
@@ -109,7 +108,7 @@ grad_prcd_flag=""; [[ "${GRAD_PRCD:-0}" == "1" ]] && grad_prcd_flag="--grad_prcd
     #     --workdir ${cno_dir}
 
     # --- init_opti ---
-    echo "================== [INFO]: init_opti Inference =================="
+    echo "================== [INFO]: init_opti Inference (lr=${lr}, init_steps=${init_steps}) =================="
     echo "  [CKPT] ${model_key}"
     python run_ini_opti.py \
         --NFE ${NFE} --cfg ${cfg_init_opti} --lr ${lr} \
@@ -155,28 +154,27 @@ grad_prcd_flag=""; [[ "${GRAD_PRCD:-0}" == "1" ]] && grad_prcd_flag="--grad_prcd
     # echo "  [CHECK] eval files:"
     # /bin/ls ${cno_eval}/*.csv 2>/dev/null
 
-    # # =========================== 7. [Eval: init_opti] ===========================
-    # echo "================== [INFO]: Eval [init_opti] → ${init_eval}/ =================="
-    # mkdir -p ${init_eval}
-    # python compute_sscd_gt.py \
-    #     --gen_dir ${init_dir}/result --ref_dir ${gt_ref_dir} \
-    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
-    #     --gpu ${gpu} \
-    #     --output_csv ${init_eval}/sscd_gt_metrics.csv
+    # =========================== 7. [Eval: init_opti] ===========================
+    echo "================== [INFO]: Eval [init_opti] → ${init_eval}/ =================="
+    mkdir -p ${init_eval}
+    python compute_sscd_gt.py \
+        --gen_dir ${init_dir}/result --ref_dir ${gt_ref_dir} \
+        --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+        --gpu ${gpu} \
+        --output_csv ${init_eval}/sscd_gt_metrics.csv
 
-    # python -m compute_t2i_metrics \
-    #     --eval_dir ${init_dir}/result --prompt_dir ${t2i_prompt_dir} \
-    #     --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
-    #     --output_csv ${init_eval}/t2i_metrics.csv \
-    #     --device cuda:${gpu} ${CS_FLAG}
+    python -m compute_t2i_metrics \
+        --eval_dir ${init_dir}/result --prompt_dir ${t2i_prompt_dir} \
+        --num_prompts ${num_samples} --num_images_per_prompt ${num_images_per_prompt} \
+        --output_csv ${init_eval}/t2i_metrics.csv \
+        --device cuda:${gpu} ${CS_FLAG}
 
-    # python merge_benchmark.py --collect_dir ${init_eval}
+    python merge_benchmark.py --collect_dir ${init_eval}
 
-    # # eval 파일 검증
-    # echo "  [CHECK] eval files:"
-    # /bin/ls ${init_eval}/*.csv 2>/dev/null
-    # echo "  [CHECK] comp files:"
-    # /bin/ls ${init_comp}/*.csv 2>/dev/null
+    echo "  [CHECK] eval files:"
+    /bin/ls ${init_eval}/*.csv 2>/dev/null
+    echo "  [CHECK] comp files:"
+    /bin/ls ${init_comp}/*.csv 2>/dev/null
 
 done
 

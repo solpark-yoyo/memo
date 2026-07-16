@@ -17,9 +17,7 @@
 # ===================================================================
 # set -euo pipefail
 
-# ---- conda 환경 (div_DM) ----
-# source /home/geonsoo/anaconda3/etc/profile.d/conda.sh
-# conda activate div_DM
+# ---- python 은 PATH 의 것 사용 (conda activate 또는 docker 의 python) ----
 
 # ---- Config (환경변수로 오버라이드 가능) ----
 gpu="${GPU:-0}"
@@ -50,13 +48,12 @@ TEXT_DIR="examples/assets/coco_v2.txt"                   # general prompt
 CHEN_MEMO="examples/assets/cvpr2025_memo_prompt.txt"     # Chen et al. memorized
 WEN_MEMO="examples/assets/new_memorized_text_prompt.txt" # Wen et al. memorized
 
-ROOT_DIR="/home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo"
 BASE_OUT="results_eps_trajectory/sd14/ddim/CFG=${cfg}_NFE=${NFE}/seed=${SEED}/batch=${batch}"
 CHEN_OUT="${BASE_OUT}/chen"
 WEN_OUT="${BASE_OUT}/wen"
 OVERLAY="${BASE_OUT}/overlay_compare.png"
 
-cd "${ROOT_DIR}"
+cd "${ROOT_DIR:-.}"  # ori_memo/ 에서 실행 가정; 다른 위치(예: docker)면 ROOT_DIR override
 
 echo "========================================="
 echo "  Memo-proxy compare  (model=${MODEL})"

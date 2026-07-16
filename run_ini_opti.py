@@ -20,6 +20,7 @@ from munch import munchify
 from latent_diffusion import StableDiffusion
 from utils_local.log_util import set_seed
 from torchvision.utils import save_image
+from wgnc import project_wgnc_batched
 
 
 def cfg_eff_at(sd, step_idx, cfg):
@@ -189,7 +190,8 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                      adjoint_normalize=False, adjoint_fd_fallback=False, fd_eps=1e-3,
                      cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1,
                      record_dir=None,
-                     type_memo_loss="minimization", memo_threshold=0.0):
+                     type_memo_loss="minimization", memo_threshold=0.0,
+                     grad_prcd=False):
     """
     AdjointDPM version of optimize_xT.
 
@@ -525,6 +527,14 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
         # Free the head graph immediately (only 2 UNets, but no need to keep).
         del x_end, eps_t, x0_hat, x_s, eps_s, noise_uc_s, noise_c_s
 
+        # ---- gradient preconditioning (GPER, Hwang & Sung ICML 2026; arXiv:2602.08646) ----
+        # project grad onto white Gaussian noise feasible set before the Adam step:
+        #   x <- Adam(x, Proj_G(grad)). keeps each update noise-aligned → prevents
+        #   the latent from drifting out of the white-Gaussian prior (memo overfitting).
+        if grad_prcd and x_T.grad is not None:
+            with torch.no_grad():
+                x_T.grad = project_wgnc_batched(x_T.grad.detach()).reshape_as(x_T)
+
         optimizer.step()
         total_loss += loss.item()
 
@@ -718,6 +728,9 @@ def main():
     p.add_argument("--memo_threshold", type=float, default=0.3,
                    help="τ for type_memo_loss=threshold (memo_proxy=||ε-ε_s||²/D 스케일; "
                         "memorized proxy 전형적으로 ~0.1-0.5, 모델/prompt 마다 튜닝)")
+    p.add_argument("--grad_prcd", action="store_true",
+                   help="GPER gradient preconditioning (arXiv:2602.08646): project grad onto "
+                        "white Gaussian noise feasible set (WGNC, block_size=16) before Adam step")
     p.add_argument("--base_seed", type=int, default=42)
     p.add_argument("--num_seeds", type=int, default=5,
                    help="images per prompt (different seed each)")
@@ -774,6 +787,12 @@ def main():
     set_seed(args.base_seed)
 
     for i, prompt in enumerate(prompts):
+        # ---- resume: 이미 생성된 prompt (img_{i:04d}_*.png 모두 존재) 는 skip ----
+        # 재실행 시 완료된 prompt 의 inference 를 건너뛰고 다음 prompt 부터 이어서.
+        if all(os.path.exists(os.path.join(result_dir, f"img_{i:04d}_{j:02d}.png"))
+               for j in range(args.num_seeds)):
+            print(f"[{i+1}/{len(prompts)}] SKIP (이미 {args.num_seeds}장 존재): \"{prompt}\"")
+            continue
         print(f"\n[{i+1}/{len(prompts)}] \"{prompt}\" (batch={args.num_seeds})")
 
         # text embedding (1회 계산, batch로 복제)
@@ -802,6 +821,7 @@ def main():
             record_dir=record_dir,
             type_memo_loss=args.type_memo_loss,
             memo_threshold=args.memo_threshold,
+            grad_prcd=args.grad_prcd,
         )
         print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
 

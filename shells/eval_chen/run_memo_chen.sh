@@ -20,6 +20,7 @@ cfg_init_opti=7.5
 cfg_start_ratio=0.0  # staged CFG: step_idx < ratio*NFE 동안 null(unconditional)만, 이후 정상 CFG. 0.0=항상 CFG
 type_memo_loss="minimization"  # minimization | threshold
 memo_threshold=0.3  # type_memo_loss=threshold 일 때만 사용
+grad_prcd_flag=""; [[ "${GRAD_PRCD:-0}" == "1" ]] && grad_prcd_flag="--grad_prcd"  # GPER gradient preconditioning (arXiv:2602.08646)
 if [[ "${type_memo_loss}" == "threshold" ]]; then memothr_dir="memothr=${memo_threshold}/"; else memothr_dir=""; fi
 seed=42
 num_samples=10
@@ -119,7 +120,7 @@ for lr in "${lr_list[@]}"; do
         --base_seed ${seed} --num_seeds ${num_images_per_prompt} \
         --prompt_dir ${init_opti_prompt_dir} --num_samples ${num_samples} \
         --device cuda:${gpu} --output_dir ${init_dir} \
-        --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold}
+        --cfg_start_ratio ${cfg_start_ratio} --type_memo_loss ${type_memo_loss} --memo_threshold ${memo_threshold} ${grad_prcd_flag}
 
     # # =========================== 5. [Eval: DDIM] ===========================
     # echo "================== [INFO]: Eval [DDIM] → ${ddim_eval}/ =================="

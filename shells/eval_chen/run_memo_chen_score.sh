@@ -19,7 +19,7 @@ num_images_per_prompt=${batch}
 # init_score_noise (Han) params 
 target_loss=0.9
 optim_iters=10
-lr_list=(0.0 0.02 0.04 0.06)
+lr_list=(0.0)
 
 # Chen setup (일반 SD1.4 + Webster)
 model_id="ckpt/stable-diffusion-v1-4"
@@ -72,30 +72,30 @@ for lr in "${lr_list[@]}"; do
     /bin/ls ${eval_dir}/*.csv 2>/dev/null
 done
 
-# =========================== 5. [Trade-off CSV + Plot] ===========================
-# collect/plot (init_score_noise 만). csv/trd 아래 lr별 서브폴더 생성.
-plot_dir="${base_dir}/init_score_noise/plot"
-mkdir -p ${plot_dir}/trd ${plot_dir}/csv
+# # =========================== 5. [Trade-off CSV + Plot] ===========================
+# # collect/plot (init_score_noise 만). csv/trd 아래 lr별 서브폴더 생성.
+# plot_dir="${base_dir}/init_score_noise/plot"
+# mkdir -p ${plot_dir}/trd ${plot_dir}/csv
 
-echo "================== [INFO]: Collect T2I-SSCD trade-off (lr별 분할 포함) =================="
-python collect_tradeoff.py --base_dir ${base_dir}/init_score_noise \
-    --out ${plot_dir}/csv/tradeoff.csv --split_lr
+# echo "================== [INFO]: Collect T2I-SSCD trade-off (lr별 분할 포함) =================="
+# python collect_tradeoff.py --base_dir ${base_dir}/init_score_noise \
+#     --out ${plot_dir}/csv/tradeoff.csv --split_lr
 
-echo "================== [INFO]: Plot trade-off curves → ${plot_dir}/trd/ (lr 표시 없음) =================="
-for xm in clipscore pickscore imagereward; do
-    python plot_tradeoff.py --csv ${plot_dir}/csv/tradeoff.csv --x_metric ${xm} \
-        --out ${plot_dir}/trd/chen_tradeoff_${xm}.png \
-        --methods init_score_noise
-done
+# echo "================== [INFO]: Plot trade-off curves → ${plot_dir}/trd/ (lr 표시 없음) =================="
+# for xm in clipscore pickscore imagereward; do
+#     python plot_tradeoff.py --csv ${plot_dir}/csv/tradeoff.csv --x_metric ${xm} \
+#         --out ${plot_dir}/trd/chen_tradeoff_${xm}.png \
+#         --methods init_score_noise
+# done
 
-# trade-off curve PNG(전체 lr, lr 표시 없음)를 각 lr 폴더에 복사
-for lr_dir in ${plot_dir}/csv/lr=*; do
-    [ -d "${lr_dir}" ] || continue
-    lr_name="$(basename "${lr_dir}")"
-    mkdir -p "${plot_dir}/trd/${lr_name}"
-    for xm in clipscore pickscore imagereward; do
-        /bin/cp -f "${plot_dir}/trd/chen_tradeoff_${xm}.png" "${plot_dir}/trd/${lr_name}/" 2>/dev/null
-    done
-done
+# # trade-off curve PNG(전체 lr, lr 표시 없음)를 각 lr 폴더에 복사
+# for lr_dir in ${plot_dir}/csv/lr=*; do
+#     [ -d "${lr_dir}" ] || continue
+#     lr_name="$(basename "${lr_dir}")"
+#     mkdir -p "${plot_dir}/trd/${lr_name}"
+#     for xm in clipscore pickscore imagereward; do
+#         /bin/cp -f "${plot_dir}/trd/chen_tradeoff_${xm}.png" "${plot_dir}/trd/${lr_name}/" 2>/dev/null
+#     done
+# done
 
 echo "[Done] → ${plot_dir}/csv/tradeoff.csv (+ lr=*/ )  +  ${plot_dir}/trd/chen_tradeoff_*.png (+ lr=*/ )"
