@@ -293,6 +293,17 @@ class StableDiffusion():
             t_in = t_in.expand(zt.shape[0])
             t_in = torch.cat([t_in] * 2)
             noise_pred = self.unet(z_in, t_in, encoder_hidden_states=c_embed)['sample']
+
+            # v-prediction 모델(SD2.0 768-v 등)의 raw 출력 v를 ε로 변환 —
+            #   ε = σ·z_t + α·v  (α=√ᾱ_t, σ=√(1−ᾱ_t))
+            # 이하 모든 ε-parameterization 수식(DDIM step·Tweedie·proxy)이 공통 동작.
+            # epsilon 모델(SD1.x·SD2-base)은 prediction_type=epsilon이라 무변화.
+            if getattr(self.scheduler.config, "prediction_type", "epsilon") == "v_prediction":
+                _at = self.alpha(t)
+                _a = _at.sqrt().to(noise_pred.dtype)
+                _s = (1 - _at).sqrt().to(noise_pred.dtype)
+                noise_pred = _s * z_in + _a * noise_pred
+
             noise_uc, noise_c = noise_pred.chunk(2)
 
         return noise_uc, noise_c
@@ -337,10 +348,12 @@ class StableDiffusion():
                                kwargs.get('c'),
                                cfg_guidance=1.0)
         elif method == 'random':
-            size = kwargs.get('latent_dim', (b_size, 4, 64, 64))
+            _wh = getattr(self.unet.config, 'sample_size', 64)   # 768-v=96, 그 외 64(기존)
+            size = kwargs.get('latent_dim', (b_size, 4, _wh, _wh))
             z = torch.randn(size).to(self.device)
         elif method == 'random_kdiffusion':
-            size = kwargs.get('latent_dim', (b_size, 4, 64, 64))
+            _wh = getattr(self.unet.config, 'sample_size', 64)   # 768-v=96, 그 외 64(기존)
+            size = kwargs.get('latent_dim', (b_size, 4, _wh, _wh))
             sigmas = kwargs.get('sigmas', [14.6146])
             z = torch.randn(size).to(self.device)
             z = z * (sigmas[0] ** 2 + 1) ** 0.5
@@ -3845,7 +3858,7 @@ class DPMpp2mCFGSolver(StableDiffusion):
         sigmas = get_sigmas_karras(len(self.scheduler.timesteps), total_sigmas.min(), total_sigmas.max(), rho=7.)
         # initialize
         x = self.initialize_latent(method="random_kdiffusion",
-                                   latent_dim=(b_size, 4, 64, 64),
+                                   latent_dim=(b_size, 4, getattr(self.unet.config, 'sample_size', 64), getattr(self.unet.config, 'sample_size', 64)),
                                    b_size=b_size,
                                    sigmas=sigmas).to(torch.float16)
         old_denoised = None # buffer

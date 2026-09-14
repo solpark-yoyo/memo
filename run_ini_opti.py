@@ -39,7 +39,11 @@ def cfg_eff_at(sd, step_idx, cfg):
     if ratio <= 0:
         return cfg
     total = len(sd.scheduler.timesteps)
-    return 0.0 if step_idx < int(total * ratio) else cfg
+    if step_idx < int(total * ratio):
+        # cfgsr 구간: 기본 null(cfg=0, unconditional만).
+        # --cfgsr_cond 켜면 conditional(cfg=1 → text prompt eps) 사용.
+        return 1.0 if getattr(sd, "cfgsr_cond", False) else 0.0
+    return cfg
 
 MEMO_PROMPTS = {
     "astronaut_on_the_moon":  "An astronaut on the moon",
@@ -67,7 +71,7 @@ def compute_memo_loss(memo_proxy, type_memo_loss="minimization", memo_threshold=
 
 
 def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
-                type_memo_loss="minimization", memo_threshold=0.0):
+                type_memo_loss="minimization", memo_threshold=0.0, batch_size=1):
     """Optimize x_T by applying gradient at [init_steps, init_steps+gap_steps, ...]"""
 
     # ---- fp32 전환: gradient가 10~19 UNet chain을 생존하도록 ----
@@ -88,7 +92,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
     s_target = timesteps[s_idx]
     alpha_s = sd.alpha(s_target)
 
-    x_T_init = torch.randn(1, 4, 64, 64, device=device, dtype=torch.float32)
+    x_T_init = torch.randn(batch_size, 4, 64, 64, device=device, dtype=torch.float32)
     x_T = x_T_init.clone().requires_grad_(True)
     optimizer = torch.optim.Adam([x_T], lr=lr)
 
@@ -123,6 +127,50 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
 
         zt = x_T.to(sd.dtype) * sd.scheduler.init_noise_sigma
 
+        # ================================================================
+        # accumulate mode: update_indices[0..ui] 의 proxy 를 누적해서 loss
+        # ================================================================
+        if type_memo_loss == "accumulate":
+            active = set(update_indices[:ui + 1])
+            accumulated_proxy = 0.0
+            n_active = 0
+            for step_idx, t in enumerate(timesteps):
+                at = sd.alpha(t)
+                at_prev = sd.alpha(t - sd.skip)
+                noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
+                eps_theta = noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
+                x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
+                zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+
+                if step_idx in active:
+                    x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype)
+                    noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
+                    eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
+                    B = eps_s.shape[0]
+                    proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean()
+                    accumulated_proxy = accumulated_proxy + proxy
+                    n_active += 1
+                    print(f"    [accumulate] step={step_idx} proxy={proxy.item():.6f} (n_active={n_active})")
+                    del x_s, eps_s, noise_uc_s, noise_c_s
+
+                if step_idx == t_idx:
+                    break
+
+            loss_memo = accumulated_proxy / n_active
+            loss_align = (x0_hat.float() - x0_orig_refs[t_idx]).reshape(x0_hat.shape[0], -1).pow(2).mean(-1).mean()
+            loss = loss_memo + lambda_align * loss_align
+
+            print(f"  [acc] ui={ui} t_idx={t_idx}  loss_memo={loss_memo.item():.6f}  (accumulated {n_active} steps)")
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            print(f"    [opt-acc] step {t_idx}: memo={loss_memo.item():.6f} "
+                  f"|dxT|={((x_T.detach() - x_T_init).norm()).item():.4f}")
+
+            del zt, x0_hat, eps_theta, noise_uc, noise_c
+            torch.cuda.empty_cache()
+            continue   # ★ 기존 (minimization/threshold) path 건너뜀
+
         # DDIM forward (with grad) up to t_idx
         for step_idx, t in enumerate(timesteps):
             at = sd.alpha(t)
@@ -141,7 +189,7 @@ def optimize_xT(sd, uc, c, cfg, device, init_steps, num_steps, gap_steps, lr, ba
         # x_s = √ᾱ_s·x̂₀ + √(1-ᾱ_s)·ε   (ε = x_T.detach() — trajectory 경로로만 gradient 흐름)
         # eps_trajectory.py:107 과 동일하게 ε를 detach.
         # x_T.detach() 안 하면 x_s→x_T shortcut gradient 생겨서 trajectory 의미 없어짐.
-        x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * x_T.detach().to(sd.dtype)
+        x_s = alpha_s.sqrt().to(sd.dtype) * x0_hat + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
         eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
 
@@ -189,7 +237,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                      init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
                      adjoint_normalize=False, adjoint_fd_fallback=False, fd_eps=1e-3,
                      cache_latents=True, grad_vanish_threshold=1e-3, batch_size=1,
-                     record_dir=None,
+                     record_dir=None, record_dirs=None,
                      type_memo_loss="minimization", memo_threshold=0.0,
                      grad_prcd=False):
     """
@@ -298,7 +346,12 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     # grid.png = row(update step 횟수) × col(x_t, x_0|t, x_s)
     batch_record_imgs = None
     batch_dirs = None
-    if record_dir is not None:
+    if record_dirs is not None:
+        # 배치 모드(batch_txt>1) — main이 row→dir 매핑을 주입 (프롬pt별 record 분리)
+        assert len(record_dirs) == batch_size
+        batch_dirs = list(record_dirs)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+    elif record_dir is not None:
         _prompt_tag = os.path.basename(record_dir.rstrip('/'))  # e.g. "img_0000"
         batch_dirs = []
         for _b in range(batch_size):
@@ -321,13 +374,14 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
         x_k = (x_T.detach() * sd.scheduler.init_noise_sigma).clone()
         xs = [x_k.clone()] if cache_latents else None
         with torch.no_grad():
+            # Forward / xs: cache
             for step_idx, t in enumerate(timesteps):
                 at = sd.alpha(t)
                 at_prev = sd.alpha(t - sd.skip)
                 noise_uc, noise_c = sd.predict_noise(x_k, t, uc, c)
                 eps_theta = cfg_combine(noise_uc, noise_c, step_idx)
                 x0_hat = (x_k - (1 - at).sqrt() * eps_theta) / at.sqrt()
-                x_k = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+                x_k = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta # DDIM 
                 if step_idx == t_idx:
                     # Match the SNR debug print of the original (lines 91-93)
                     _snr_t = (at / (1 - at)).item()
@@ -336,7 +390,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
                     break
                 # cache the NEXT state for steps we will visit in the adjoint
                 if cache_latents and (step_idx + 1) <= t_idx:
-                    xs.append(x_k.clone())
+                    xs.append(x_k.clone()) # cache
         # x_k is now x_{t_idx+1} (after DDIM step at step_idx==t_idx).
         # But the terminal head needs x_{t_idx} (BEFORE the DDIM step).
         # xs[t_idx] was cached at step_idx==t_idx-1 (appended after DDIM step).
@@ -346,6 +400,75 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
             # Fallback: recompute x_{t_idx} from x_T (no cache path)
             x_end_state = _recompute_to(sd, x_T, timesteps, t_idx, uc, c,
                                         cfg, sd.scheduler.init_noise_sigma).clone()
+
+        # ---------- (2-ACC) ACCUMULATE MODE (adjointDPM) -----------------
+        if type_memo_loss == "accumulate": # update_indices: [3,6,9,12]
+            active = update_indices[:ui + 1] # t_idx, ui:2, active: [3,6,9]
+            g_injections = {}
+            loss_memo_acc = 0.0
+            with torch.enable_grad():
+                # accumulate calculate
+                for k in active: 
+                    x_end_k = xs[k].detach().clone().requires_grad_(True)
+                    t_k = timesteps[k]; at_k = sd.alpha(t_k)
+                    _nu, _nc = sd.predict_noise(x_end_k, t_k, uc, c)
+                    eps_k = cfg_combine(_nu, _nc, k)
+                    x0_k = (x_end_k - (1 - at_k).sqrt() * eps_k) / at_k.sqrt()
+                    x_s_k = (alpha_s.sqrt().to(sd.dtype) * x0_k
+                             + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype))
+                    _nus, _ncs = sd.predict_noise(x_s_k, s_target, uc, c)
+                    eps_s_k = cfg_combine(_nus, _ncs, s_idx)
+                    B = eps_s_k.shape[0]
+                    proxy_k = (epsilon_ref.to(sd.dtype) - eps_s_k).reshape(B, -1).pow(2).mean(-1).mean()
+                    loss_memo_acc = loss_memo_acc + proxy_k
+                    g_injections[k] = torch.autograd.grad(proxy_k, x_end_k)[0]
+                    print(f"  [acc-adj] step={k} proxy={proxy_k.item():.6f}")
+                    del x_end_k, eps_k, x0_k, x_s_k, eps_s_k, _nu, _nc, _nus, _ncs
+                n_acc = len(active)
+                loss_memo = loss_memo_acc / n_acc
+                # align at t_idx
+                x_end = x_end_state.detach().clone().requires_grad_(True)
+                t_break = timesteps[t_idx]; at_break = sd.alpha(t_break)
+                _nut, _nct = sd.predict_noise(x_end, t_break, uc, c)
+                eps_t = cfg_combine(_nut, _nct, t_idx)
+                x0_hat = (x_end - (1 - at_break).sqrt() * eps_t) / at_break.sqrt()
+                loss_align = ((x0_hat.float() - x0_orig_refs[t_idx])
+                              .reshape(x0_hat.shape[0], -1).pow(2).mean(-1).mean())
+            loss = loss_memo + lambda_align * loss_align
+            print(f"  [acc] ui={ui} t_idx={t_idx} loss_memo={loss_memo.item():.6f} ({n_acc} steps)")
+            # adjoint recursion with g injections
+            # active=[2,4]라고 하면 g_interval = (grad about proxy(time_step=2) w.r.t x_2,
+            # ,grad about proxy(time_step=4) w.r.t x_4)
+            g = g_injections[t_idx]
+            g_terminal_norm = g.flatten().norm().item()
+            if t_idx == 0:
+                x_T.grad = (g * sd.scheduler.init_noise_sigma).detach().reshape_as(x_T)
+            else:
+                for kk in range(t_idx, 0, -1):
+                    j = kk - 1
+                    t_j = timesteps[j]; a_j = sd.alpha(t_j); a_jp1 = sd.alpha(t_j - sd.skip)
+                    A_j = (a_jp1 / a_j).sqrt()
+                    B_j = (1 - a_jp1).sqrt() - (a_jp1 * (1 - a_j) / a_j).sqrt()
+                    x_j_local = xs[j].detach().clone().requires_grad_(True)
+                    _nuj, _ncj = sd.predict_noise(x_j_local, t_j, uc, c)
+                    eps_j = cfg_combine(_nuj, _ncj, j)
+                    Jt_g = torch.autograd.grad(eps_j, x_j_local, grad_outputs=g)[0]
+                    g = A_j * g + B_j * Jt_g
+                    if j in g_injections:
+                        g = g + g_injections[j]
+                    del x_j_local, eps_j, _nuj, _ncj, Jt_g
+            x_T.grad = (g * sd.scheduler.init_noise_sigma).detach().reshape_as(x_T)
+            if grad_prcd and x_T.grad is not None:
+                with torch.no_grad():
+                    x_T.grad = project_wgnc_batched(x_T.grad.detach()).reshape_as(x_T)
+            optimizer.step()
+            total_loss += loss.item()
+            print(f"  [opt-acc-adj] t_idx={t_idx} memo={loss_memo.item():.6f} "
+                  f"|dxT|={((x_T.detach() - x_T_init).norm()).item():.4f}")
+            del x_end, x0_hat, eps_t, _nut, _nct, g
+            if xs is not None: del xs
+            torch.cuda.empty_cache()
+            continue
 
         # ---------- (2) TERMINAL ADJOINT g_{t_idx} via 2-UNet head --------
         # The loss head is shallow (only 2 UNets) and never vanishes, so we
@@ -378,7 +501,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
             # x_s with DETACHED ε_ref (identical to original line 100).
             x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
-                   + (1 - alpha_s).sqrt().to(sd.dtype) * x_T.detach().to(sd.dtype))
+                   + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype))
 
             # UNet call #2 (grad): CFG noise at s_target for the memo proxy.
             noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
@@ -399,7 +522,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
             # ---- record: 매 update step마다 batch(=seed)별 latent 누적 + loss.csv append ----
             # 그리드는 loop 종료 후 batch별 1장으로 합침: row=update step(init_opti 횟수), col=(x_t, x_0|t, x_s).
-            if record_dir is not None and batch_dirs is not None:
+            if batch_dirs is not None:
                 import csv as _csv
                 with torch.no_grad():
                     _vae_dtype = next(sd.vae.parameters()).dtype   # VAE는 fp16 (UNet만 fp32 강제 중)
@@ -522,7 +645,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
                 # §7.6: x_0 = x_T · init_noise_sigma (chain rule for the scalar).
                 # x_T is the leaf, so the final gradient w.r.t. x_T picks up σ.
-                x_T.grad = (g * sd.scheduler.init_noise_sigma).detach().reshape_as(x_T)
+                x_T.grad = (g * sd.scheduler.init_noise_sigma).detach().reshape_as(x_T) # x_T.shape == [B,C,H,W]
 
         # Free the head graph immediately (only 2 UNets, but no need to keep).
         del x_end, eps_t, x0_hat, x_s, eps_s, noise_uc_s, noise_c_s
@@ -531,6 +654,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
         # project grad onto white Gaussian noise feasible set before the Adam step:
         #   x <- Adam(x, Proj_G(grad)). keeps each update noise-aligned → prevents
         #   the latent from drifting out of the white-Gaussian prior (memo overfitting).
+
         if grad_prcd and x_T.grad is not None:
             with torch.no_grad():
                 x_T.grad = project_wgnc_batched(x_T.grad.detach()).reshape_as(x_T)
@@ -553,7 +677,7 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
 
     # ---- record: update loop 종료 후 batch(=seed)별 그리드 저장 ----
     # row = update step(init_opti 횟수), col = (x_t, x_0|t, x_s)
-    if record_dir is not None and batch_record_imgs is not None:
+    if batch_record_imgs is not None:
         from torchvision.utils import make_grid as _make_grid, save_image as _save_image
         for b in range(len(batch_record_imgs)):
             if batch_record_imgs[b]:
@@ -569,6 +693,593 @@ def optimize_xT_adj(sd, uc, c, cfg, device,
     sd.dtype = _orig_dtype
 
     return x_T_opt, total_loss
+
+
+# ===================================================================
+#  ⑧ [Anchor: Twd_gap] (candidate_proxy.md ⑧) — x_T 직접 최적화 (adjoint 불필요)
+#  loss = s_Δ + w_twd · memo_proxy(①)
+#    s_Δ        = ‖ε_uc(x_T) − ε_c(x_T)‖₂   (per-sample L2 norm → batch mean)
+#    memo_proxy = ‖ε_noise − ε_s‖²/D, 체인 x_T → x̂_{0|T} → x_s → ε_s (ⓑ~ⓔ head)
+#  grad 가 UNet 2개짜리 얕은 헤드에서 x_T 로 곧장 흐름 — DDIM 연쇄(ⓐ)를 거치지
+#  않으므로 AdjointDPM(optimize_xT_adj) 불필요. init_steps/gap_steps 무의미(항상
+#  x_T), num_steps = x_T 갱신 횟수.
+# ===================================================================
+def optimize_xT_anchor(sd, uc, c, cfg, device,
+                       num_steps, lr, base_s_ratio, w_twd=1.0,
+                       batch_size=1, record_dir=None, record_dirs=None):
+    """loss = s_Δ + w_twd · memo_proxy  (minimization 고정 — compute_memo_loss 갈래 없음)"""
+
+    # ---- fp32 강제 (optimize_xT_adj 정책 동일) ----
+    _orig_dtype = sd.dtype
+    sd.unet.float()
+    sd.dtype = torch.float32
+    uc = uc.float()
+    c = c.float()
+
+    timesteps = list(sd.scheduler.timesteps)
+    T_max = timesteps[0]
+    at = sd.alpha(T_max)
+    s_idx = int(len(timesteps) * base_s_ratio)
+    s_target = timesteps[s_idx]
+    alpha_s = sd.alpha(s_target)
+
+    x_T_init = torch.randn(batch_size, 4, 64, 64, device=device, dtype=torch.float32)
+    x_T = x_T_init.clone().requires_grad_(True)
+    optimizer = torch.optim.Adam([x_T], lr=lr)
+
+    # ε_noise: x_s noising + gap 기준 noise (x_T 와 독립인 fresh noise, update 동안 고정)
+    epsilon_ref = torch.randn_like(x_T_init)
+
+    def cfg_combine(noise_uc, noise_c, step_idx):
+        return noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
+
+    # ---- record setup: batch(=seed)별 폴더 (optimize_xT_adj 패턴) ----
+    # 구조: record/img_PPPP/img_PPPP_BB/{grid.png, loss.csv}
+    # grid.png = row(update 횟수) × col(x_T, x_0|T, x_s)
+    batch_record_imgs = None
+    batch_dirs = None
+    if record_dirs is not None:
+        assert len(record_dirs) == batch_size
+        batch_dirs = list(record_dirs)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+    elif record_dir is not None:
+        _prompt_tag = os.path.basename(record_dir.rstrip('/'))
+        batch_dirs = []
+        for _b in range(batch_size):
+            _bd = os.path.join(record_dir, f"{_prompt_tag}_{_b:02d}")
+            os.makedirs(_bd, exist_ok=True)
+            batch_dirs.append(_bd)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+
+    print(f"[anchor] T_max={T_max} alpha_T={at.item():.4f} "
+          f"(1/sqrt(alpha)={(1/at.sqrt()).item():.2f}x amplification)  "
+          f"s_target={s_target}(idx {s_idx})  w_twd={w_twd}")
+
+    total_loss = 0.0
+    for ui in range(num_steps):
+        optimizer.zero_grad()
+        with torch.enable_grad():
+            zt = x_T * sd.scheduler.init_noise_sigma
+
+            # UNet #1: x_T 에서 uncond/cond ε — s_Δ 와 eps_ref(CFG 결합) 동시 획득
+            _nu, _nc = sd.predict_noise(zt, T_max, uc, c)
+            B = zt.shape[0]
+            s_delta_per = (_nc - _nu).reshape(B, -1).norm(dim=-1)   # (B,) per-sample L2 norm
+            s_delta = s_delta_per.mean()
+            eps_ref = cfg_combine(_nu, _nc, 0)
+
+            # Tweedie x̂_{0|T} → x_s forward noising
+            x0_hat = (zt - (1 - at).sqrt() * eps_ref) / at.sqrt()
+            x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
+                   + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype))
+
+            # UNet #2: x_s 에서 ε_s → memo_proxy (① head)
+            _nus, _ncs = sd.predict_noise(x_s, s_target, uc, c)
+            eps_s = cfg_combine(_nus, _ncs, s_idx)
+            memo_proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean(-1)
+            gap = memo_proxy.mean()
+            loss = s_delta + w_twd * gap
+
+            # grad 분리 로깅 (⑥ on_main 패턴): |g1|=s_Δ 기여, |g2|=gap 기여
+            _g1_n = torch.autograd.grad(s_delta, x_T, retain_graph=True)[0].norm().item()
+            _g2_n = torch.autograd.grad(w_twd * gap, x_T, retain_graph=True)[0].norm().item()
+            print(f"  [opt-anchor {ui+1}/{num_steps}] s_delta={s_delta.item():.4f} "
+                  f"gap={gap.item():.6f} |g1|={_g1_n:.4f} |g2|={_g2_n:.4f} "
+                  f"loss={loss.item():.4f}")
+
+            # ---- record: batch별 (x_T, x_0|T, x_s) 누적 + loss.csv append ----
+            if batch_dirs is not None:
+                import csv as _csv
+                with torch.no_grad():
+                    _vae_dtype = next(sd.vae.parameters()).dtype   # VAE는 fp16 (UNet만 fp32 강제 중)
+                    def _dec(z):
+                        return (sd.decode(z.detach().to(_vae_dtype)) / 2 + 0.5).clamp(0, 1).cpu()
+                    img_xT = _dec(zt)
+                    img_x0 = _dec(x0_hat)
+                    img_xs = _dec(x_s)
+                    for b in range(B):
+                        batch_record_imgs[b].extend([img_xT[b], img_x0[b], img_xs[b]])
+                        _csv_path = os.path.join(batch_dirs[b], "loss.csv")
+                        _wh = not os.path.exists(_csv_path)
+                        with open(_csv_path, "a", newline="") as _f:
+                            _w = _csv.writer(_f)
+                            if _wh:
+                                _w.writerow(["update_step", "s_delta", "memo_proxy", "loss"])
+                            _w.writerow([ui, f"{s_delta_per[b].item():.6f}",
+                                         f"{memo_proxy[b].item():.6f}", f"{loss.item():.6f}"])
+
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        print(f"    |dxT|={((x_T.detach() - x_T_init).norm()).item():.4f}")
+
+        del _nu, _nc, _nus, _ncs, eps_ref, x0_hat, x_s, eps_s
+        torch.cuda.empty_cache()
+
+    # ---- record: update loop 종료 후 batch별 그리드 저장 ----
+    if batch_record_imgs is not None:
+        from torchvision.utils import make_grid as _make_grid, save_image as _save_image
+        for b in range(len(batch_record_imgs)):
+            if batch_record_imgs[b]:
+                _grid = _make_grid(batch_record_imgs[b], nrow=3)
+                _save_image(_grid, os.path.join(batch_dirs[b], "grid.png"))
+
+    x_T_opt = x_T.detach().clone()
+    del x_T, optimizer
+    torch.cuda.empty_cache()
+
+    # ---- restore fp16 ----
+    sd.unet.half()
+    sd.dtype = _orig_dtype
+
+    return x_T_opt, total_loss
+
+
+# ===================================================================
+#  ⑨ [Btw_anchor: batch-traction] (candidate_proxy.md ⑨) — x_T 직접 최적화
+#  loss = s_Δ + w_btw · Σ_{i<j} ‖x_i − x_j‖₂
+#    s_Δ = ‖ε_uc(x_T) − ε_c(x_T)‖₂   (⑧ 과 동일, per-sample L2 norm → batch mean)
+#    btw = 프롬pt 블록 안쪽 x_T pairwise L2 norm 합 (⑥ loss_1 의 norm 버전) —
+#          최소화하면 batch 샘플 인력(뭉침). memorized 프롬pt에서 batch 간 std가
+#          압도적으로 크다는 관측(2026-09-07)의 잉여 spread 를 눌러 완화.
+#          prompt-major 블록 [p0의 S개, p1의 S개, ...] 안쪽 쌍만 인력 —
+#          batch_txt>1 에서도 프롬pt 간 오염 없음.
+#  grad: s_Δ는 UNet 1회 경유, btw는 x_T 직접(UNet 무경유) — 역방향 UNet 1회로
+#  ⑧(2회)보다 얕음. init/gap_steps 무의미, num_steps = x_T 갱신 횟수.
+# ===================================================================
+def optimize_xT_btw(sd, uc, c, cfg, device,
+                    num_steps, lr, w_btw=1.0,
+                    batch_size=1, record_dir=None, record_dirs=None, seeds_per_prompt=None):
+    """loss = s_Δ + w_btw · Σ_{i<j}‖x_i−x_j‖₂  (minimization 고정 — compute_memo_loss 갈래 없음)"""
+    assert batch_size >= 2, "btw: need >=2 samples in batch for pairwise term (--num_seeds>=2)"
+
+    # ---- fp32 강제 (⑧ anchor 정책 동일) ----
+    _orig_dtype = sd.dtype
+    sd.unet.float()
+    sd.dtype = torch.float32
+    uc = uc.float()
+    c = c.float()
+
+    timesteps = list(sd.scheduler.timesteps)
+    T_max = timesteps[0]
+
+    x_T_init = torch.randn(batch_size, 4, 64, 64, device=device, dtype=torch.float32)
+    x_T = x_T_init.clone().requires_grad_(True)
+    optimizer = torch.optim.Adam([x_T], lr=lr)
+
+    # ---- record setup: batch(=seed)별 폴더 (⑧ 패턴) ----
+    # 구조: record/img_PPPP/img_PPPP_BB/{grid.png, loss.csv} — grid = row(update) × col(x_T)
+    batch_record_imgs = None
+    batch_dirs = None
+    if record_dirs is not None:
+        assert len(record_dirs) == batch_size
+        batch_dirs = list(record_dirs)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+    elif record_dir is not None:
+        _prompt_tag = os.path.basename(record_dir.rstrip('/'))
+        batch_dirs = []
+        for _b in range(batch_size):
+            _bd = os.path.join(record_dir, f"{_prompt_tag}_{_b:02d}")
+            os.makedirs(_bd, exist_ok=True)
+            batch_dirs.append(_bd)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+
+    _S_pp = seeds_per_prompt if seeds_per_prompt is not None else batch_size
+    print(f"[btw] T_max={T_max}  w_btw={w_btw}  batch={batch_size} "
+          f"(blocks={batch_size // _S_pp} x S={_S_pp}, "
+          f"pairs={batch_size // _S_pp * (_S_pp * (_S_pp - 1) // 2)})")
+
+    total_loss = 0.0
+    for ui in range(num_steps):
+        optimizer.zero_grad()
+        with torch.enable_grad():
+            zt = x_T * sd.scheduler.init_noise_sigma
+
+            # UNet 1회: x_T 에서 uncond/cond ε → s_Δ (⑧ 첫 항 그대로)
+            _nu, _nc = sd.predict_noise(zt, T_max, uc, c)
+            B = zt.shape[0]
+            s_delta_per = (_nc - _nu).reshape(B, -1).norm(dim=-1)   # (B,) per-sample L2 norm
+            s_delta = s_delta_per.mean()
+
+            # btw: 프롬pt 블록별 x_T pairwise L2 norm 합 (⑥ loss_1 패턴 — batch_txt>1에서도
+            #      프롬pt끼리 인력 오염 방지. 행 순서 = prompt-major: [p0의 S개, p1의 S개, ...])
+            z_flat = x_T.reshape(B, -1)
+            S_pp = seeds_per_prompt if seeds_per_prompt is not None else B
+            assert B % S_pp == 0, f"btw: B={B} not a multiple of seeds_per_prompt={S_pp}"
+            _l1_blocks = []
+            for _n in range(B // S_pp):
+                _zb = z_flat[_n * S_pp:(_n + 1) * S_pp]
+                _db = torch.cdist(_zb, _zb)                           # (S,S) L2 norm
+                _iub = torch.triu_indices(S_pp, S_pp, offset=1)
+                _l1_blocks.append(_db[_iub[0], _iub[1]].sum())        # Σ_{i<j} ‖x_i−x_j‖₂
+            btw = sum(_l1_blocks) if len(_l1_blocks) > 1 else _l1_blocks[0]
+            loss = s_delta + w_btw * btw
+
+            # grad 분리 로깅 (⑧ 패턴): |g1|=s_Δ 기여, |g2|=btw 기여
+            _g1_n = torch.autograd.grad(s_delta, x_T, retain_graph=True)[0].norm().item()
+            _g2_n = torch.autograd.grad(w_btw * btw, x_T, retain_graph=True)[0].norm().item()
+            print(f"  [opt-btw {ui+1}/{num_steps}] s_delta={s_delta.item():.4f} "
+                  f"btw={btw.item():.2f} |g1|={_g1_n:.4f} |g2|={_g2_n:.4f} "
+                  f"loss={loss.item():.4f}")
+
+            # ---- record: batch별 x_T 누적 + loss.csv append ----
+            if batch_dirs is not None:
+                import csv as _csv
+                with torch.no_grad():
+                    _vae_dtype = next(sd.vae.parameters()).dtype   # VAE는 fp16 (UNet만 fp32 강제 중)
+                    img_xT = (sd.decode(zt.detach().to(_vae_dtype)) / 2 + 0.5).clamp(0, 1).cpu()
+                    for b in range(B):
+                        batch_record_imgs[b].append(img_xT[b])
+                        _csv_path = os.path.join(batch_dirs[b], "loss.csv")
+                        _wh = not os.path.exists(_csv_path)
+                        with open(_csv_path, "a", newline="") as _f:
+                            _w = _csv.writer(_f)
+                            if _wh:
+                                _w.writerow(["update_step", "s_delta", "btw", "loss"])
+                            _w.writerow([ui, f"{s_delta_per[b].item():.6f}",
+                                         f"{btw.item():.6f}", f"{loss.item():.6f}"])
+
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        print(f"    |dxT|={((x_T.detach() - x_T_init).norm()).item():.4f}")
+
+        del _nu, _nc
+        torch.cuda.empty_cache()
+
+    # ---- record: update loop 종료 후 batch별 그리드 저장 ----
+    if batch_record_imgs is not None:
+        from torchvision.utils import make_grid as _make_grid, save_image as _save_image
+        for b in range(len(batch_record_imgs)):
+            if batch_record_imgs[b]:
+                _grid = _make_grid(batch_record_imgs[b], nrow=1)
+                _save_image(_grid, os.path.join(batch_dirs[b], "grid.png"))
+
+    x_T_opt = x_T.detach().clone()
+    del x_T, optimizer
+    torch.cuda.empty_cache()
+
+    # ---- restore fp16 ----
+    sd.unet.half()
+    sd.dtype = _orig_dtype
+
+    return x_T_opt, total_loss
+
+
+# ===================================================================
+#  ⑦/⑩ spectral score band energy (candidate_proxy.md ⑦ low · ⑩ high)
+#  ε_cfg → rfft(ortho) → block energy → 대역별 sum (÷B) — differentiable
+#  (측정 체계 eps_trajectory.py --proxy_trend --band_agg sum --lh_ratio 와 동일 스케일)
+# ===================================================================
+def spectral_low_band_energy(eps, block_size=16, lh_ratio=0.1, band="low"):
+    """⑦/⑩ L = (1/B)Σ_{band} E_p — ε_cfg 스펙트럼 대역별 block energy 합 (per-sample).
+
+    eps (B,C,H,W) → flatten (B,N) → rfft(ortho) → Hermitian 제거 y (B,N/2)
+    → (B,P,B) reshape → E_p = ‖y^(p)‖² (B,P) → n_band = int(P·lh_ratio)개 block 선택
+    → 합 ÷ block_size.
+    band="low"  (⑦): 앞 n_band개 block(저주파) — energies[:, :n_band]
+    band="high" (⑩): 뒤 n_band개 block(고주파) — energies[:, P-n_band:]
+    스케일: white Gaussian 기준 ≈ n_band (예: lh=0.1, P=512 → ≈51) —
+    ④ spectral_l2_loss의 mean_p(E_p)/B 와 동일 체계, 집계만 대역별 sum.
+
+    differentiable — UNet head(ε_cfg)에서 z_{t-1}까지 backward 가능.
+    Returns: (B,) per-sample (batch mean은 호출부에서)
+    """
+    SQRT2 = 2.0 ** 0.5
+    B_bs = eps.shape[0]
+    B = block_size
+    xf = eps.reshape(B_bs, -1).to(torch.float64)        # (B_bs, N)
+    f = torch.fft.rfft(xf, norm="ortho")                # (B_bs, N/2+1)
+    f[:, 0] = (f[:, 0] + 1j * f[:, -1]) / SQRT2         # compact spectral (per sample)
+    y = f[:, :-1]                                       # (B_bs, N/2)
+    pad = (-y.shape[1]) % B
+    if pad:
+        y = torch.nn.functional.pad(y, (0, pad))
+    y = y.reshape(B_bs, -1, B)                          # (B_bs, P, B)
+    energies = y.abs().square().sum(dim=2).real          # (B_bs, P) E_p
+    P = energies.shape[1]
+    n_band = max(1, min(int(P * lh_ratio), P // 2))
+    if band == "low":
+        sel = energies[:, :n_band]
+    elif band == "high":
+        sel = energies[:, P - n_band:]
+    else:
+        raise ValueError(f"band must be 'low' or 'high', got {band!r}")
+    return sel.sum(dim=1) / float(B)                     # (B_bs,) 대역별 sum ÷B
+
+
+def optimize_xt(sd, uc, c, cfg, device,
+                init_steps, num_steps, gap_steps, lr, base_s_ratio, lambda_align,
+                batch_size=1, record_dir=None, record_dirs=None,
+                type_memo_loss="minimization", memo_threshold=0.0,
+                grad_prcd=False, xt_loss="memo_proxy",
+                on_main=False, w_twd=1.0, on_main_spread=False, seeds_per_prompt=None,
+                block_size=16, lh_ratio=0.1):
+    """1-1 (candidate_proxy.md): memo_proxy loss 를 중간 latent x_t 에만 흘려 최적화.
+
+    optimize_xT_adj 와의 차이: grad 가 ⓐ(x_T→x_t DDIM 연쇄)를 거슬러 전파되지 않음 —
+    update 시점의 x_t 를 leaf 로 만들어 Adam 갱신 후 gap_steps 전진
+    (optimize_xt_spectral.py::run_spectral_opt 패턴). AdjointDPM 불필요, update 1회당
+    backward 는 terminal head(ⓑ~ⓔ, 2-UNet) 뿐.
+
+    Chain (registry 1-1, v4 — DDIM denoising 먼저, 이후 Adam update):
+      ① z_{t-1} ← DDIM(z_t)                        (η=0, no grad)
+      ② L = memo_head(z_{t-1}) = ‖ε_ref−ε_s‖²/D   (loss 를 z_{t-1} 에서 계산, align 없음)
+      ③ z_{t-1} ← Adam(z_{t-1}, ∇_{z_{t-1}} L)    ← update 적용점 = z_{t-1} (norm ≈ lr·√(B·D))
+      → backward UNet 2회(head 만)
+
+    Returns: (zt_final [B,4,64,64], last_forwarded int, total_loss float)
+      zt_final = 마지막 update 이후 gap_steps 전진한 latent (이후 inference 재개용),
+      last_forwarded = zt_final 의 step index
+    """
+    if type_memo_loss == "accumulate":
+        raise NotImplementedError(
+            "optimize_xt (mode=xt) supports minimization/threshold only — "
+            "accumulate is for xT mode (optimize_xT_adj)")
+
+    # ---- fp32 강제: UNet backward 정밀도 (optimize_xT_adj 정책과 동일) ----
+    _orig_dtype = sd.dtype
+    sd.unet.float()
+    sd.dtype = torch.float32
+    uc = uc.float()
+    c = c.float()
+
+    timesteps = list(sd.scheduler.timesteps)
+    update_indices = [init_steps + i * gap_steps for i in range(num_steps)]
+    update_indices = [i for i in update_indices if i < len(timesteps)]
+    # ★ NFE 초과 방지: update(t_idx) 후 gap 전진 + resume 구간(step ≥ t_idx+gap+1)이
+    #   최소 1 step 확보되도록 — 벗어나는 update는 종료(제외).
+    #   (예: init=15/nsteps=9/gap=4, NFE=50 → 마지막 update 47은 47+4 전진으로 schedule
+    #    소진 → 제외, 실제 마지막 update = 43, resume 48~49 확보)
+    _n_updates_planned = len(update_indices)
+    update_indices = [i for i in update_indices if i + gap_steps < len(timesteps)]
+    if len(update_indices) < _n_updates_planned:
+        print(f"  [nfe-guard] dropped {_n_updates_planned - len(update_indices)} update(s) "
+              f"(NFE={len(timesteps)} limit) — actual updates={update_indices}")
+    if not update_indices:
+        raise ValueError(f"update_indices empty: init_steps={init_steps} >= NFE={len(timesteps)}")
+
+    # s target for memo_proxy (unchanged)
+    s_idx = int(len(timesteps) * base_s_ratio)
+    s_target = timesteps[s_idx]
+    alpha_s = sd.alpha(s_target)
+
+    x_T_init = torch.randn(batch_size, 4, 64, 64, device=device, dtype=torch.float32)
+
+    def cfg_combine(noise_uc, noise_c, step_idx):
+        return noise_uc + cfg_eff_at(sd, step_idx, cfg) * (noise_c - noise_uc)
+
+    # ε reference = x_T 와 독립인 fresh random noise (proxy reference, update 동안 고정)
+    # (v2: align loss 제거 — reference trajectory precompute 불필요)
+    epsilon_ref = torch.randn_like(x_T_init)
+
+    # ---- record setup: batch(=seed)별 폴더 (optimize_xT_adj 패턴) ----
+    batch_record_imgs = None
+    batch_dirs = None
+    if record_dirs is not None:
+        # 배치 모드(batch_txt>1) — main이 row→dir 매핑을 주입 (프롬pt별 record 분리)
+        assert len(record_dirs) == batch_size
+        batch_dirs = list(record_dirs)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+    elif record_dir is not None:
+        _prompt_tag = os.path.basename(record_dir.rstrip('/'))  # e.g. "img_0000"
+        batch_dirs = []
+        for _b in range(batch_size):
+            _bd = os.path.join(record_dir, f"{_prompt_tag}_{_b:02d}")
+            os.makedirs(_bd, exist_ok=True)
+            batch_dirs.append(_bd)
+        batch_record_imgs = [[] for _ in range(batch_size)]
+
+    # ---- 1. no_grad DDIM 0→init_steps (ⓐ — grad 여기서 끊김) ----
+    zt = (x_T_init.to(sd.dtype) * sd.scheduler.init_noise_sigma).clone()
+    with torch.no_grad():
+        for step_idx, t in enumerate(timesteps):
+            if step_idx == init_steps:
+                break
+            at = sd.alpha(t)
+            at_prev = sd.alpha(t - sd.skip)
+            noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
+            eps_theta = cfg_combine(noise_uc, noise_c, step_idx)
+            x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
+            zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+    print(f"  [forward] DDIM 0 → step {init_steps} (no grad, ⓐ excluded from ∇)")
+
+    total_loss = 0.0
+    # ---- 2. update 마다: DDIM denoising 먼저 → z_{t-1} 에서 Adam update → 전진 ----
+    for ui, t_idx in enumerate(update_indices):
+        t_upd = timesteps[t_idx]
+        at_upd = sd.alpha(t_upd)
+        at_prev = sd.alpha(t_upd - sd.skip)          # ᾱ at step 후 상태 (z_{t-1})
+        t_prev = timesteps[min(t_idx + 1, len(timesteps) - 1)]  # z_{t-1} 의 timestep
+
+        # ---- Step 1: DDIM denoising 먼저 (no grad): z_t → z_{t-1} ----
+        with torch.no_grad():
+            _nu_t, _nc_t = sd.predict_noise(zt, t_upd, uc, c)
+            eps_t = cfg_combine(_nu_t, _nc_t, t_idx)
+            x0_hat_t = (zt - (1 - at_upd).sqrt() * eps_t) / at_upd.sqrt()  # Tweedie
+            z_prev0 = (at_prev.sqrt().to(sd.dtype) * x0_hat_t
+                       + (1 - at_prev).sqrt().to(sd.dtype) * eps_t)        # DDIM step (η=0)
+
+        # ---- Step 2: memo loss 를 z_{t-1}(leaf) 에서 계산 → Adam 으로 update ----
+        zt_leaf = z_prev0.detach().to(torch.float32).clone().requires_grad_(True)  # z_{t-1}
+        optimizer = torch.optim.Adam([zt_leaf], lr=lr)
+        optimizer.zero_grad()
+
+        with torch.enable_grad():
+            _nu_p, _nc_p = sd.predict_noise(zt_leaf, t_prev, uc, c)          # ⓑ UNet @ z_{t-1}
+            eps_p = cfg_combine(_nu_p, _nc_p, t_idx + 1)
+            x0_hat = (zt_leaf - (1 - at_prev).sqrt() * eps_p) / at_prev.sqrt()  # ⓒ Tweedie
+
+            if on_main:
+                # ⑥ [On-main] Compression into on-manifold — seed 간 인력 + w_twd·Tweedie gap
+                # loss_1 = Σ_{i<j} ‖z^i − z^j‖²/D  (per-pair ÷D — proxy 스케일 정합)
+                #          : batch 행 = 한 프롬pt의 seed들 (batch_txt=1 전제) — 최소화하면
+                #            seed latent 뭉침(general의 collapse 회복) = compression
+                #            --on_main_spread 시 부호 반전(원식 −Σ 리터럴, seed 분리 방향)
+                # loss_2 = memo_proxy(① Twd_gap head ⓑ~ⓔ) per-sample mean
+                # total = loss_1 + w_twd · loss_2
+                assert zt_leaf.shape[0] >= 2, "on_main: need >=2 seeds (--num_seeds>=2, --batch_txt=1)"
+                x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
+                       + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype))  # ⓓ
+                noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)  # ⓔ UNet
+                eps_s = cfg_combine(noise_uc_s, noise_c_s, s_idx)
+
+                B = eps_s.shape[0]
+                memo_proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean(-1)  # (B,)
+                loss_2 = memo_proxy.mean()
+
+                z_flat = zt_leaf.reshape(B, -1).float()                    # (B, D)
+                D_dim = z_flat.shape[-1]
+                # 프롬pt 블록별 pairwise — batch_txt>1에서도 프롬pt끼리 인력 오염 방지
+                # (행 순서 = prompt-major: [p0의 S개 seed, p1의 S개 seed, ...])
+                S_pp = seeds_per_prompt if seeds_per_prompt is not None else B
+                assert B % S_pp == 0, f"on_main: B={B} not a multiple of seeds_per_prompt={S_pp}"
+                _l1_blocks = []
+                for _n in range(B // S_pp):
+                    _zb = z_flat[_n * S_pp:(_n + 1) * S_pp]
+                    _d2b = torch.cdist(_zb, _zb).pow(2)
+                    _iub = torch.triu_indices(S_pp, S_pp, offset=1)
+                    _l1_blocks.append((_d2b[_iub[0], _iub[1]] / D_dim).sum())
+                loss_1 = sum(_l1_blocks) if len(_l1_blocks) > 1 else _l1_blocks[0]
+                spread_now = loss_1.item()                                  # 관측용 (프롬pt 블록 합)
+                if on_main_spread:
+                    loss_1 = -loss_1
+
+                loss = loss_1 + w_twd * loss_2
+                loss_memo = loss                              # print/record alias
+            elif xt_loss == "eps_ref_mse":
+                # ⑤: L = ‖ε_ref − ε_cfg(z_{t-1}, t-1)‖²/D — 재포워드 없이 score 직접 (UNet 1회)
+                #    양수 minimize (2026-09-05 복원 — 09-01부터 무문서화 음수(maximize) 유입,
+                #    명세·측정 방향(L 높음=memorized)과 모순되어 제거)
+                B = eps_p.shape[0]
+                memo_proxy = (epsilon_ref.to(sd.dtype) - eps_p).reshape(B, -1).pow(2).mean(-1)  # (B,)
+                loss = memo_proxy.mean()  # 단순 MSE — threshold·compute_memo_loss 없음
+                loss_memo = loss          # record용 alias
+                x_s = x0_hat  # ⑤는 x_s 포워드 없음 — record 열 placeholder
+                eps_s = eps_p  # record(eps_s_norm) 용 placeholder — ⑤에서는 ε_cfg 기준
+            elif xt_loss in ("spec_low", "spec_high"):
+                # ⑦/⑩: L = (1/B)Σ_{band} E_p — ε_cfg(z_{t-1}, t-1) 스펙트럼 block energy
+                #    대역 합 (minimize). ⑦ low: 앞 L_lh개 block — memo 58→101 vs text 52→4
+                #    (측정 2026-09-05) | ⑩ high: 뒤 L_lh개 block — ⑦의 고주파 대칭 변형
+                #    (2026-09-07). UNet 1회(ⓑ) + FFT — 재포워드 없음 (⑤ 패턴)
+                _band = "low" if xt_loss == "spec_low" else "high"
+                memo_proxy = spectral_low_band_energy(eps_p, block_size, lh_ratio, band=_band)  # (B,)
+                loss = memo_proxy.mean()   # 단순 minimization — threshold·compute_memo_loss 없음
+                loss_memo = loss           # record용 alias
+                x_s = x0_hat  # ⑦/⑩은 x_s 포워드 없음 — record 열 placeholder (⑤ 패턴)
+                eps_s = eps_p  # record(eps_s_norm) 용 placeholder — ⑦/⑩에서는 ε_cfg 기준
+            else:
+                x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
+                       + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref.to(sd.dtype))  # ⓓ
+                noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)  # ⓔ UNet
+                eps_s = cfg_combine(noise_uc_s, noise_c_s, s_idx)
+
+                B = eps_s.shape[0]
+                memo_proxy = (epsilon_ref.to(sd.dtype) - eps_s).reshape(B, -1).pow(2).mean(-1)  # (B,)
+                loss_memo = compute_memo_loss(memo_proxy, type_memo_loss, memo_threshold)
+                loss = loss_memo  # align 없음 — memo loss 만
+
+        _loss_tag = (f"[memo_loss={type_memo_loss},τ={memo_threshold}]"
+                     if type_memo_loss == "threshold" else "[memo_loss=minimization]")
+        print(f"{_loss_tag} proxy(↓=mitigate): {memo_proxy.mean().item():.6f}  "
+              f"loss: {loss_memo.item():.6f}")
+
+        if on_main:
+            # 리뷰 반영: 두 항의 grad 기여 분리 로깅 (lr/w_twd sweep 해석용)
+            _g1_n = torch.autograd.grad(loss_1, zt_leaf, retain_graph=True)[0].norm().item()
+            _g2_n = torch.autograd.grad(w_twd * loss_2, zt_leaf, retain_graph=True)[0].norm().item()
+        loss.backward()
+        if grad_prcd and zt_leaf.grad is not None:
+            with torch.no_grad():
+                zt_leaf.grad = project_wgnc_batched(zt_leaf.grad.detach()).reshape_as(zt_leaf)
+        optimizer.step()  # ★ z_{t-1} ← Adam(z_{t-1}, ∇_{z_{t-1}} L)
+        total_loss += loss.item()
+
+        _g_norm = zt_leaf.grad.norm().item() if zt_leaf.grad is not None else float('nan')
+        print(f"    [opt-xt {ui + 1}/{len(update_indices)}] t_idx={t_idx} "
+              f"memo={loss_memo.item():.6f} "
+              f"|g_xt|={_g_norm:.4f} "
+              f"|dxt|={(zt_leaf.detach() - z_prev0).norm().item():.4f}"
+              + (f" spread={spread_now:.4f} twd={loss_2.item():.6f} "
+                 f"|g1|={_g1_n:.4f} |g2|={_g2_n:.4f}" if on_main else ""))
+
+        # ---- record: (x_t, x_0|t, x_s) 누적 + loss.csv append (기존 패턴) ----
+        if batch_dirs is not None:
+            import csv as _csv
+            with torch.no_grad():
+                _vae_dtype = next(sd.vae.parameters()).dtype
+                def _dec(z):
+                    return (sd.decode(z.detach().to(_vae_dtype)) / 2 + 0.5).clamp(0, 1).cpu()
+                img_xt = _dec(zt_leaf.detach())
+                img_x0t = _dec(x0_hat)
+                img_xs = _dec(x_s)
+                B_ = img_xt.shape[0]
+                eps_s_n = eps_s.detach().reshape(B_, -1).norm(dim=-1)
+                eps_ref_n = epsilon_ref.detach().to(sd.dtype).reshape(B_, -1).norm(dim=-1)
+                for b in range(B_):
+                    batch_record_imgs[b].extend([img_xt[b], img_x0t[b], img_xs[b]])
+                    _csv_path = os.path.join(batch_dirs[b], "loss.csv")
+                    _wh = not os.path.exists(_csv_path)
+                    with open(_csv_path, "a", newline="") as _f:
+                        _w = csv.writer(_f)
+                        if _wh:
+                            _w.writerow(["update_step", "t_idx", "eps_s_norm", "eps_ref_norm",
+                                         "memo_proxy", "loss_memo", "loss"])
+                        _w.writerow([ui, t_idx, f"{eps_s_n[b].item():.6f}",
+                                     f"{eps_ref_n[b].item():.6f}", f"{memo_proxy[b].item():.6f}",
+                                     f"{loss_memo.item():.6f}", f"{loss.item():.6f}"])
+
+        # ---- Step 3: 갱신된 z_{t-1} 에서 gap 전진 (no grad) → 다음 update 위치로 ----
+        zt = zt_leaf.detach().clone()
+        del zt_leaf, optimizer, z_prev0, x0_hat_t, eps_t, x0_hat, x_s, eps_s, eps_p
+        del _nu_t, _nc_t, _nu_p, _nc_p
+        torch.cuda.empty_cache()
+
+        with torch.no_grad():
+            for step_idx in range(t_idx + 2, min(t_idx + 1 + gap_steps, len(timesteps))):
+                t = timesteps[step_idx]
+                at = sd.alpha(t)
+                at_prev = sd.alpha(t - sd.skip)
+                noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
+                eps_theta = cfg_combine(noise_uc, noise_c, step_idx)
+                x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
+                zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+
+    last_forwarded = min(update_indices[-1] + gap_steps, len(timesteps) - 1)
+
+    # ---- record: grid.png (row=update step, col=x_t, x_0|t, x_s) ----
+    if batch_record_imgs is not None:
+        from torchvision.utils import make_grid as _make_grid, save_image as _save_image
+        for b in range(len(batch_record_imgs)):
+            if batch_record_imgs[b]:
+                _save_image(_make_grid(batch_record_imgs[b], nrow=3),
+                            os.path.join(batch_dirs[b], "grid.png"))
+
+    zt_final = zt.detach().clone()
+    sd.unet.half()
+    sd.dtype = _orig_dtype
+
+    return zt_final, last_forwarded, total_loss
 
 
 @torch.no_grad()
@@ -621,8 +1332,10 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
     direction 으로 쏠릴수록 proxy 가 커짐 → memorization 신호.
 
     batch(= num_seeds) 차원으로 mean ± std 를 계산해 plot + csv → record_dir/.
+    record_dir=None 이면 plot/csv 저장 없이 생성만 (batch_txt>1 모드).
     """
-    os.makedirs(record_dir, exist_ok=True)
+    if record_dir is not None:
+        os.makedirs(record_dir, exist_ok=True)
     timesteps = list(sd.scheduler.timesteps)
     s_idx = int(len(timesteps) * base_s_ratio)
     s_target = timesteps[s_idx]
@@ -644,7 +1357,7 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
 
         # ---- memo proxy at this step (eps_trajectory.py:107-116 과 동일) ----
         x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
-               + (1 - alpha_s).sqrt().to(sd.dtype) * x_T_noise)
+               + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref)
         noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
         eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
         B = eps_s.shape[0]
@@ -660,37 +1373,127 @@ def ddim_inference_with_proxy(sd, x_T, uc, c, cfg, base_s_ratio,
     std = proxy_arr.std(axis=1)
     steps = np.asarray(step_indices)
 
-    # ---- plot: batch mean ± std (+개별 batch faint) ----
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for b in range(B):
-        ax.plot(steps, proxy_arr[:, b], color="tab:blue", alpha=0.12, linewidth=0.8)
-    ax.plot(steps, mean, color="tab:blue", linewidth=2.2, marker="o", markersize=4,
-            label="mean memo_proxy")
-    ax.fill_between(steps, mean - std, mean + std, color="tab:blue", alpha=0.2,
-                    label=f"±1 std (batch n={B})")
-    ax.set_xlabel("Denoising Step", fontsize=12)
-    ax.set_ylabel(r"memo_proxy  $\|\,\epsilon_{ref} - \epsilon_s\,\|^2 / D$", fontsize=12)
-    ax.set_title(
-        f"memo_proxy vs denoising step (post x_T opti) — {prompt_tag}\n"
-        f"batch mean ± std (n={B}, s_idx={s_idx}, base_s_ratio={base_s_ratio})",
-        fontsize=11)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=10)
-    plt.tight_layout()
-    plot_path = os.path.join(record_dir, filename)
-    plt.savefig(plot_path, dpi=150)
-    plt.close()
-    print(f"[plot] memo_proxy (post-opti DDIM) -> {plot_path}")
+    if record_dir is not None:
+        # ---- plot: batch mean ± std (+개별 batch faint) ----
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for b in range(B):
+            ax.plot(steps, proxy_arr[:, b], color="tab:blue", alpha=0.12, linewidth=0.8)
+        ax.plot(steps, mean, color="tab:blue", linewidth=2.2, marker="o", markersize=4,
+                label="mean memo_proxy")
+        ax.fill_between(steps, mean - std, mean + std, color="tab:blue", alpha=0.2,
+                        label=f"±1 std (batch n={B})")
+        ax.set_xlabel("Denoising Step", fontsize=12)
+        ax.set_ylabel(r"memo_proxy  $\|\,\epsilon_{ref} - \epsilon_s\,\|^2 / D$", fontsize=12)
+        ax.set_title(
+            f"memo_proxy vs denoising step (post x_T opti) — {prompt_tag}\n"
+            f"batch mean ± std (n={B}, s_idx={s_idx}, base_s_ratio={base_s_ratio})",
+            fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=10)
+        plt.tight_layout()
+        plot_path = os.path.join(record_dir, filename)
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        print(f"[plot] memo_proxy (post-opti DDIM) -> {plot_path}")
 
-    # ---- csv: step, mean, std, per-sample ----
-    csv_path = os.path.join(record_dir, "memo_proxy_ddim.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["step", "mean", "std"] + [f"sample_{b:02d}" for b in range(B)])
-        for si, m, sd_v, row in zip(steps, mean, std, proxy_arr):
-            w.writerow([int(si), f"{m:.6f}", f"{sd_v:.6f}"]
-                       + [f"{v:.6f}" for v in row])
-    print(f"[csv]  memo_proxy (post-opti DDIM) -> {csv_path}")
+        # ---- csv: step, mean, std, per-sample ----
+        csv_path = os.path.join(record_dir, "memo_proxy_ddim.csv")
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["step", "mean", "std"] + [f"sample_{b:02d}" for b in range(B)])
+            for si, m, sd_v, row in zip(steps, mean, std, proxy_arr):
+                w.writerow([int(si), f"{m:.6f}", f"{sd_v:.6f}"]
+                           + [f"{v:.6f}" for v in row])
+        print(f"[csv]  memo_proxy (post-opti DDIM) -> {csv_path}")
+    else:
+        plot_path = None
+
+    img = sd.decode(x0_hat)
+    return (img / 2 + 0.5).clamp(0, 1), plot_path
+
+
+@torch.no_grad()
+def ddim_inference_with_proxy_from(sd, zt, start_idx, uc, c, cfg, base_s_ratio,
+                                   record_dir, prompt_tag, filename="memo_proxy_ddim.png"):
+    """optimize_xt(1-1) 용 resume inference — 중간 latent zt 에서 DDIM 재개하며 남은
+    denoising step 의 memo_proxy 를 수집 (plot/csv 구조는 ddim_inference_with_proxy 와 동일).
+
+    zt = optimize_xt 의 zt_final (start_idx step 까지 전진 완료 상태) —
+    step start_idx+1 부터 NFE-1 까지 샘플링.
+    """
+    if record_dir is not None:
+        os.makedirs(record_dir, exist_ok=True)
+    timesteps = list(sd.scheduler.timesteps)
+    s_idx = int(len(timesteps) * base_s_ratio)
+    s_target = timesteps[s_idx]
+    alpha_s = sd.alpha(s_target)
+
+    epsilon_ref = torch.randn_like(zt).to(sd.dtype)  # proxy reference (fresh random)
+    zt = zt.to(sd.dtype)
+
+    step_indices = []
+    memo_proxy_per_step = []
+
+    for step_idx in range(start_idx + 1, len(timesteps)):
+        t = timesteps[step_idx]
+        at = sd.alpha(t)
+        at_prev = sd.alpha(t - sd.skip)
+        noise_uc, noise_c = sd.predict_noise(zt, t, uc, c)
+        eps_theta = noise_uc + cfg * (noise_c - noise_uc)
+        x0_hat = (zt - (1 - at).sqrt() * eps_theta) / at.sqrt()
+
+        # ---- memo proxy at this step (ddim_inference_with_proxy 와 동일) ----
+        x_s = (alpha_s.sqrt().to(sd.dtype) * x0_hat
+               + (1 - alpha_s).sqrt().to(sd.dtype) * epsilon_ref)
+        noise_uc_s, noise_c_s = sd.predict_noise(x_s, s_target, uc, c)
+        eps_s = noise_uc_s + cfg_eff_at(sd, s_idx, cfg) * (noise_c_s - noise_uc_s)
+        B = eps_s.shape[0]
+        memo_proxy = (epsilon_ref - eps_s).reshape(B, -1).pow(2).mean(-1)   # (B,)
+        memo_proxy_per_step.append(memo_proxy.float().cpu().numpy())
+        step_indices.append(step_idx)
+
+        # DDIM step (η=0)
+        zt = at_prev.sqrt() * x0_hat + (1 - at_prev).sqrt() * eps_theta
+
+    proxy_arr = np.stack(memo_proxy_per_step, axis=0)   # (num_steps, B)
+    mean = proxy_arr.mean(axis=1)
+    std = proxy_arr.std(axis=1)
+    B = proxy_arr.shape[1]
+    steps = np.asarray(step_indices)
+
+    if record_dir is not None:
+        # ---- plot: batch mean ± std (+개별 batch faint) ----
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for b in range(B):
+            ax.plot(steps, proxy_arr[:, b], color="tab:blue", alpha=0.12, linewidth=0.8)
+        ax.plot(steps, mean, color="tab:blue", linewidth=2.2, marker="o", markersize=4,
+                label="mean memo_proxy")
+        ax.fill_between(steps, mean - std, mean + std, color="tab:blue", alpha=0.2,
+                        label=f"±1 std (batch n={B})")
+        ax.set_xlabel("Denoising Step", fontsize=12)
+        ax.set_ylabel(r"memo_proxy  $\|\,\epsilon_{ref} - \epsilon_s\,\|^2 / D$", fontsize=12)
+        ax.set_title(
+            f"memo_proxy vs denoising step (post x_t opti, resume@{start_idx + 1}) — {prompt_tag}\n"
+            f"batch mean ± std (n={B}, s_idx={s_idx}, base_s_ratio={base_s_ratio})",
+            fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=10)
+        plt.tight_layout()
+        plot_path = os.path.join(record_dir, filename)
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        print(f"[plot] memo_proxy (post-opti DDIM, resume) -> {plot_path}")
+
+        csv_path = os.path.join(record_dir, "memo_proxy_ddim.csv")
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["step", "mean", "std"] + [f"sample_{b:02d}" for b in range(B)])
+            for si, m, sd_v, row in zip(steps, mean, std, proxy_arr):
+                w.writerow([int(si), f"{m:.6f}", f"{sd_v:.6f}"]
+                           + [f"{v:.6f}" for v in row])
+        print(f"[csv]  memo_proxy (post-opti DDIM, resume) -> {csv_path}")
+    else:
+        plot_path = None
 
     img = sd.decode(x0_hat)
     return (img / 2 + 0.5).clamp(0, 1), plot_path
@@ -705,12 +1508,20 @@ def load_prompts(prompt_dir, num_samples):
 
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument("--opti_mode", type=str, default="xT", choices=["xT", "xt"],
+                   help="최적화 대상 변수: xT(기본) = optimize_xT_adj — x_T(initial noise) 갱신, "
+                        "grad 가 DDIM 연쇄(ⓐ)를 타고 x_T 까지 (AdjointDPM) | "
+                        "xt = optimize_xt — 중간 latent x_t 갱신 (registry 1-1), "
+                        "grad 는 ⓑ~ⓔ terminal head 만, x_T 불변")
     p.add_argument("--NFE", type=int, default=50)
     p.add_argument("--cfg", type=float, default=7.5)
     p.add_argument("--cfg_start_ratio", type=float, default=0.0,
                    help="denoising step 중 CFG 적용 시작 ratio. "
                         "step_idx < ratio*NFE 동안은 null(unconditional)만 사용하고, "
                         "그 이후 step부터 정상 CFG. 0.0 = 항상 CFG (기존 동작). 예: 0.3 = 초반 30%% null")
+    p.add_argument("--cfgsr_cond", action="store_true",
+                   help="cfgsr 구간(step < cfg_start_ratio*NFE)의 eps 를 null(cfg=0) 대신 "
+                        "conditional(text prompt, cfg=1) 로 사용")
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--init_steps", type=int, default=10,
                    help="DDIM steps before first gradient update")
@@ -722,16 +1533,62 @@ def main():
     p.add_argument("--lambda_align", type=float, default=0.1,
                    help="Weight for text alignment regularization")
     p.add_argument("--type_memo_loss", type=str, default="minimization",
-                   choices=["minimization", "threshold"],
-                   help="minimization: loss=mean(proxy) 전체 완화 | "
-                        "threshold: loss=mean(relu(proxy-τ)), proxy>τ 일 때만 grad 흘림")
+                   choices=["minimization", "threshold", "accumulate"],
+                   help="minimization | threshold | accumulate "
+                        "(여러 step 의 proxy 를 누적해서 loss)")
     p.add_argument("--memo_threshold", type=float, default=0.3,
                    help="τ for type_memo_loss=threshold (memo_proxy=||ε-ε_s||²/D 스케일; "
                         "memorized proxy 전형적으로 ~0.1-0.5, 모델/prompt 마다 튜닝)")
     p.add_argument("--grad_prcd", action="store_true",
                    help="GPER gradient preconditioning (arXiv:2602.08646): project grad onto "
                         "white Gaussian noise feasible set (WGNC, block_size=16) before Adam step")
+    p.add_argument("--xt_loss", type=str, default="memo_proxy",
+                   choices=["memo_proxy", "eps_ref_mse", "spec_low", "spec_high"],
+                   help="opti_mode=xt 의 loss 갈래: memo_proxy(① ‖ε_ref−ε_s‖²/D, 재포워드) | "
+                        "eps_ref_mse(⑤ ‖ε_ref−ε_cfg(z_{t-1},t-1)‖²/D — x_s 재포워드 없이 "
+                        "score 직접, UNet 1회) | "
+                        "spec_low(⑦ ε_cfg 저주파 block energy 합 (1/B)Σ_{p<L_lh}E_p — "
+                        "rfft(ortho) → block → low-band sum, UNet 1회) | "
+                        "spec_high(⑩ ε_cfg 고주파 block energy 합 (1/B)Σ_{p≥P−L_lh}E_p — "
+                        "⑦의 고주파 대칭 변형, 뒤 int(P·LH_ratio)개 block, UNet 1회)")
+    p.add_argument("--lh_ratio", type=float, default=0.1,
+                   help="⑦/⑩ spec_low·spec_high 의 대역 선택 비율 LH_ratio (block 총 수 P "
+                        "기준 — low: 앞 int(P·LH_ratio)개 / high: 뒤 int(P·LH_ratio)개 block "
+                        "선택, 측정 eps_trajectory.py --lh_ratio 와 동일). "
+                        "예: 0.1 → P=512 중 51 blocks (WG 기준 ≈51). default 0.1")
+    p.add_argument("--block_size", type=int, default=16,
+                   help="⑦/⑩ spec_low·spec_high 의 주파수 block 크기 B (측정 체계 기본값과 "
+                        "동일). default 16")
     p.add_argument("--base_seed", type=int, default=42)
+    p.add_argument("--on_main", action="store_true",
+                   help="⑥ [On-main] compression: loss = loss_1(seed 인력) + w_twd·Twd_gap "
+                        "— loss_1 = Σ_{i<j}‖x^i_t−x^j_t‖²/D 최소화(seed 뭉침, general의 collapse 회복). "
+                        "batch 행 = prompt-major seed 블록 (--num_seeds>=2, batch_txt 호환 — 블록 안쪽 쌍만 인력). "
+                        "출력은 output_dir 아래 on_main/ 폴더에 저장")
+    p.add_argument("--w_twd", type=float, default=1.0,
+                   help="Tweedie gap 가중치 — ⑥ on_main: loss_1 + w_twd·loss_2 | "
+                        "⑧ anchor: s_Δ + w_twd·memo_proxy")
+    p.add_argument("--on_main_spread", action="store_true",
+                   help="⑥ loss_1 부호 반전(원식 −Σ 리터럴) — 최소화 시 seed 분리 방향")
+    p.add_argument("--anchor", action="store_true",
+                   help="⑧ [Anchor: Twd_gap]: loss = s_Δ + w_twd·memo_proxy(①) — "
+                        "s_Δ = ‖ε_uc(x_T)−ε_c(x_T)‖₂ (x_T에서 직접, per-sample norm), "
+                        "gap 체인 x_T→x̂_{0|T}→x_s→ε_s. x_T 직접 갱신 (adjoint 불필요 — "
+                        "UNet 2회 얕은 헤드). init/gap_steps 무시, num_steps=갱신 횟수. "
+                        "출력은 output_dir 아래 twd_anchor/ 폴더에 저장")
+    p.add_argument("--btw_anchor", action="store_true",
+                   help="⑨ [Btw_anchor]: loss = s_Δ + w_btw·Σ_{i<j}‖x_i−x_j‖₂ — "
+                        "s_Δ = ‖ε_uc(x_T)−ε_c(x_T)‖₂ (⑧과 동일), btw 항 = x_T pairwise "
+                        "L2 norm 합 (최소화 → batch 인력·뭉침 — memorized의 압도적 batch "
+                        "std 관측 대응). 프롬pt 블록 안쪽 쌍만 인력 (batch_txt 호환 — "
+                        "프롬pt 간 오염 없음, ⑥ 패턴 승계). UNet 1회 얕은 헤드, "
+                        "x_T 직접 갱신, --num_seeds≥2 필수. "
+                        "출력은 output_dir 아래 btw_anchor/ 폴더에 저장")
+    p.add_argument("--w_btw", type=float, default=1.0,
+                   help="⑨ btw_anchor: batch pairwise 인력 가중치 (loss = s_Δ + w_btw·btw)")
+    p.add_argument("--batch_txt", type=int, default=1,
+                   help="한 번의 최적화에 묶을 프롬pt 수 (1=기존 per-prompt 경로). "
+                        "batch=num_seeds×batch_txt — 24GB에서는 10 이하 권장")
     p.add_argument("--num_seeds", type=int, default=5,
                    help="images per prompt (different seed each)")
     p.add_argument("--prompt_dir", type=str,
@@ -743,6 +1600,44 @@ def main():
     p.add_argument("--device", type=str, default="cuda:0")
     p.add_argument("--output_dir", type=str, default=os.path.join(SCRIPT_DIR, "workdir", "ini_opti", "memorized"))
     args = p.parse_args()
+
+    # ---- ⑤/⑦ xt_loss 갈래 가드: memo_proxy 외 loss 는 opti_mode=xt 전용 ----
+    # (xT 모드의 optimize_xT_adj은 xt_loss 를 받지 않음 — 조용한 무시 방지)
+    if args.xt_loss != "memo_proxy":
+        assert args.opti_mode == "xt", \
+            f"--xt_loss {args.xt_loss} is for opti_mode=xt only (xT mode is fixed to memo_proxy(①))"
+
+    # ---- ⑥ on_main 가드 + 전용 출력 폴더 ----
+    if args.on_main:
+        assert args.opti_mode == "xt", "on_main requires opti_mode=xt (reuses Twd_gap head)"
+        assert args.num_seeds >= 2, "on_main: num_seeds>=2 required for seed attraction"
+        assert args.xt_loss == "memo_proxy", "on_main is based on xt_loss=memo_proxy (① head) — exclusive with eps_ref_mse"
+        assert args.type_memo_loss == "minimization", "on_main bypasses compute_memo_loss — threshold/accumulate unsupported"
+        if "on_main" not in args.output_dir.split(os.sep):
+            args.output_dir = os.path.join(args.output_dir, "on_main")
+        print(f"[on_main] w_twd={args.w_twd} spread_mode={args.on_main_spread} → {args.output_dir}")
+
+    # ---- ⑧ anchor 가드 + 전용 출력 폴더 ----
+    if args.anchor:
+        assert args.opti_mode == "xT", "anchor requires opti_mode=xT (direct initial-noise update)"
+        assert args.type_memo_loss == "minimization", "anchor supports minimization only"
+        assert not args.on_main, "anchor and on_main are mutually exclusive (on_main is xt-only)"
+        if "twd_anchor" not in args.output_dir.split(os.sep):
+            args.output_dir = os.path.join(args.output_dir, "twd_anchor")
+        print(f"[anchor] w_twd={args.w_twd} num_steps={args.num_steps} "
+              f"(direct x_T update, no adjoint) → {args.output_dir}")
+
+    # ---- ⑨ btw_anchor 가드 + 전용 출력 폴더 ----
+    if args.btw_anchor:
+        assert args.opti_mode == "xT", "btw_anchor requires opti_mode=xT (direct initial-noise update)"
+        assert args.type_memo_loss == "minimization", "btw_anchor supports minimization only"
+        assert not args.anchor, "btw_anchor and anchor(⑧) are mutually exclusive"
+        assert not args.on_main, "btw_anchor and on_main are mutually exclusive (on_main is xt-only)"
+        assert args.num_seeds >= 2, "btw_anchor: num_seeds>=2 required for pairwise attraction"
+        if "btw_anchor" not in args.output_dir.split(os.sep):
+            args.output_dir = os.path.join(args.output_dir, "btw_anchor")
+        print(f"[btw] w_btw={args.w_btw} num_steps={args.num_steps} "
+              f"(direct x_T update, batch traction) → {args.output_dir}")
     device = torch.device(args.device)
 
     # ---- 벤치마크 측정 시작 ----
@@ -755,6 +1650,7 @@ def main():
     sd = StableDiffusion(solver_config=solver_config, model_key=args.model_key, device=device, seed=args.base_seed)
     sd.unet.enable_gradient_checkpointing()
     sd.cfg_start_ratio = args.cfg_start_ratio   # staged CFG: 초반 ratio*NFE step 동안 null 만, 이후 정상 CFG
+    sd.cfgsr_cond = args.cfgsr_cond             # cfgsr 구간 eps: False=null(cfg=0), True=cond(text prompt, cfg=1)
 
     update_steps = [args.init_steps + i * args.gap_steps for i in range(args.num_steps)]
     _cfg_n = int(args.NFE * args.cfg_start_ratio) if args.cfg_start_ratio > 0 else 0
@@ -786,66 +1682,140 @@ def main():
     # DDIM(text_to_mscoco)과 동일: set_seed 1회 후 prompt마다 batch randn 연속 (reset X)
     set_seed(args.base_seed)
 
-    for i, prompt in enumerate(prompts):
-        # ---- resume: 이미 생성된 prompt (img_{i:04d}_*.png 모두 존재) 는 skip ----
-        # 재실행 시 완료된 prompt 의 inference 를 건너뛰고 다음 prompt 부터 이어서.
-        if all(os.path.exists(os.path.join(result_dir, f"img_{i:04d}_{j:02d}.png"))
-               for j in range(args.num_seeds)):
-            print(f"[{i+1}/{len(prompts)}] SKIP (이미 {args.num_seeds}장 존재): \"{prompt}\"")
+    # ---- 프롬pt 배치 청킹 (batch_txt=1이면 크기 1 청크 = 기존 per-prompt 경로와
+    #      동일 연산 순서·RNG 스트림 유지) ----
+    S = args.num_seeds
+    for i0 in range(0, len(prompts), max(args.batch_txt, 1)):
+        chunk = prompts[i0:i0 + max(args.batch_txt, 1)]
+        N = len(chunk)
+
+        # ---- resume: 청크 내 전 프롬pt가 이미 생성됐으면 skip ----
+        if all(all(os.path.exists(os.path.join(result_dir, f"img_{i0+n:04d}_{j:02d}.png"))
+                   for j in range(S)) for n in range(N)):
+            print(f"[{i0+1}~{i0+N}/{len(prompts)}] SKIP ({S} images already exist)")
             continue
-        print(f"\n[{i+1}/{len(prompts)}] \"{prompt}\" (batch={args.num_seeds})")
+        print(f"\n[{i0+1}~{i0+N}/{len(prompts)}] ({[p[:40] for p in chunk]}) "
+              f"(seeds={S} × txt={N})")
+        if N * S > 10:
+            print(f"  [warn] batch={N*S} > 10 — near 24GB VRAM limit (reduce batch_txt if OOM)")
 
-        # text embedding (1회 계산, batch로 복제)
-        uc, c = sd.get_text_embed(null_prompt="", prompt=prompt) # sen : [1,77,768]
-        uc_batch = uc.repeat(args.num_seeds, 1, 1) # [num_images_per_prompt,77,768]
-        c_batch = c.repeat(args.num_seeds, 1, 1) # num_images_per_prompt == num_seeds
+        # text embedding — 프롬pt별 개별 인코딩 후 cat (padding 간섭 없음;
+        # tokenizer가 padding='max_length'(77 고정)라 배치/단일 인코딩 결과 동일)
+        _embs = [sd.get_text_embed(null_prompt="", prompt=p) for p in chunk]
+        uc = _embs[0][0]                                   # null embed — 프롬pt 무관 공용
+        uc_batch = uc.repeat(N * S, 1, 1)
+        c_batch = torch.cat([c_.repeat(S, 1, 1) for _, c_ in _embs], dim=0)  # prompt-major
 
-        # 초기 noise — DDIM(text_to_mscoco)과 동일: main set_seed 1회 후
-        # prompt마다 torch.randn([num_seeds,4,64,64]) batch 연속 생성 (reset X)
-        x_T_init_batch = torch.randn(args.num_seeds, 4, 64, 64, device=device, dtype=torch.float32)
-        print(f"  x_T batch: {x_T_init_batch.shape}")
-
+        # 초기 noise — prompt별 순차 draw (batch_txt=1이면 기존 스트림과 bit-identical)
+        x_T_init_batch = torch.cat(
+            [torch.randn(S, 4, 64, 64, device=device, dtype=torch.float32) for _ in range(N)],
+            dim=0)
         # ---- per-batch compute cost 측정 시작 (optimize + inference) ----
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
         _t0 = time.perf_counter()
 
-        # Phase 1: optimize x_T (batch)
-        record_dir = os.path.join(args.output_dir, "record", f"img_{i:04d}")
-        os.makedirs(record_dir, exist_ok=True)
-        x_T_opt_batch, loss = optimize_xT_adj(
-            sd, uc_batch, c_batch, args.cfg, device,
-            args.init_steps, args.num_steps, args.gap_steps, args.lr,
-            args.base_s_ratio, args.lambda_align,
-            batch_size=args.num_seeds,
-            record_dir=record_dir,
-            type_memo_loss=args.type_memo_loss,
-            memo_threshold=args.memo_threshold,
-            grad_prcd=args.grad_prcd,
-        )
-        print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
+        # record: N=1 기존 단일 경로 / N>1 프롬pt별 디렉토리 + row→dir 매핑 주입
+        if N == 1:
+            record_dir = os.path.join(args.output_dir, "record", f"img_{i0:04d}")
+            os.makedirs(record_dir, exist_ok=True)
+            record_dirs = None
+        else:
+            record_dir = None
+            record_dirs = []
+            for n in range(N):
+                _tag = f"img_{i0+n:04d}"
+                for j in range(S):
+                    _bd = os.path.join(args.output_dir, "record", _tag, f"{_tag}_{j:02d}")
+                    os.makedirs(_bd, exist_ok=True)
+                    record_dirs.append(_bd)
 
-        # Phase 2: DDIM inference (batch) + step-wise memo_proxy 수집 → plot
-        # x_T opti 종료 후 DDIM sampling 하며 각 denoising step 의 memo_proxy 를
-        # batch(num_seeds) mean ± std 로 시각화 → record/img_{i:04d}/
-        img_batch, _ = ddim_inference_with_proxy(
-            sd, x_T_opt_batch, uc_batch, c_batch, args.cfg,
-            args.base_s_ratio, record_dir, prompt_tag=f"img_{i:04d}")
+        # Phase 1+2: optimize (opti_mode 분기) → inference + step-wise memo_proxy 수집
+        if args.opti_mode == "xt":
+            # 1-1: 중간 latent x_t 최적화 (ⓑ~ⓔ만 grad, x_T 불변) → 이후 step 에서 DDIM 재개
+            zt_opt_batch, last_forwarded, loss = optimize_xt(
+                sd, uc_batch, c_batch, args.cfg, device,
+                args.init_steps, args.num_steps, args.gap_steps, args.lr,
+                args.base_s_ratio, args.lambda_align,
+                batch_size=N * S,
+                record_dir=record_dir, record_dirs=record_dirs,
+                type_memo_loss=args.type_memo_loss,
+                memo_threshold=args.memo_threshold,
+                grad_prcd=args.grad_prcd,
+                xt_loss=args.xt_loss,
+                on_main=args.on_main,
+                w_twd=args.w_twd,
+                on_main_spread=args.on_main_spread,
+                seeds_per_prompt=args.num_seeds,
+                block_size=args.block_size,
+                lh_ratio=args.lh_ratio,
+            )
+            print(f"  x_t_opt[{args.xt_loss}{'/on_main' if args.on_main else ''}]: "
+                  f"{zt_opt_batch.shape}  loss: {loss:.4f}  "
+                  f"(inference resume from step {last_forwarded + 1})")
+            # N>1에선 프롬pt 혼합 mean±std plot이 무의미 → record 저장 없이 생성만
+            img_batch, _ = ddim_inference_with_proxy_from(
+                sd, zt_opt_batch, last_forwarded, uc_batch, c_batch, args.cfg,
+                args.base_s_ratio, record_dir,
+                prompt_tag=(f"img_{i0:04d}" if N == 1 else None))
+        else:
+            if args.anchor:
+                # ⑧ anchor: x_T 직접 최적화 (s_Δ + Twd_gap, adjoint 없음)
+                x_T_opt_batch, loss = optimize_xT_anchor(
+                    sd, uc_batch, c_batch, args.cfg, device,
+                    args.num_steps, args.lr, args.base_s_ratio,
+                    w_twd=args.w_twd,
+                    batch_size=N * S,
+                    record_dir=record_dir, record_dirs=record_dirs,
+                )
+                print(f"  x_T_opt[anchor]: {x_T_opt_batch.shape}  loss: {loss:.4f}")
+            elif args.btw_anchor:
+                # ⑨ btw_anchor: x_T 직접 최적화 (s_Δ + batch pairwise 인력, adjoint 없음)
+                x_T_opt_batch, loss = optimize_xT_btw(
+                    sd, uc_batch, c_batch, args.cfg, device,
+                    args.num_steps, args.lr,
+                    w_btw=args.w_btw,
+                    batch_size=N * S,
+                    record_dir=record_dir, record_dirs=record_dirs,
+                    seeds_per_prompt=args.num_seeds,
+                )
+                print(f"  x_T_opt[btw_anchor]: {x_T_opt_batch.shape}  loss: {loss:.4f}")
+            else:
+                # 기존: x_T(initial noise) 최적화 (AdjointDPM) → x_T 부터 전체 DDIM
+                x_T_opt_batch, loss = optimize_xT_adj(
+                    sd, uc_batch, c_batch, args.cfg, device,
+                    args.init_steps, args.num_steps, args.gap_steps, args.lr,
+                    args.base_s_ratio, args.lambda_align,
+                    batch_size=N * S,
+                    record_dir=record_dir, record_dirs=record_dirs,
+                    type_memo_loss=args.type_memo_loss,
+                    memo_threshold=args.memo_threshold,
+                    grad_prcd=args.grad_prcd,
+                )
+                print(f"  x_T_opt: {x_T_opt_batch.shape}  loss: {loss:.4f}")
+
+            # Phase 2: DDIM inference (batch) + step-wise memo_proxy 수집 → plot
+            img_batch, _ = ddim_inference_with_proxy(
+                sd, x_T_opt_batch, uc_batch, c_batch, args.cfg,
+                args.base_s_ratio, record_dir,
+                prompt_tag=(f"img_{i0:04d}" if N == 1 else None))
 
         torch.cuda.synchronize()
         _t1 = time.perf_counter()
         _batch_time_s = _t1 - _t0
         _batch_peak_gb = torch.cuda.max_memory_allocated() / (1024**3)
-        _per_sample_sec = (_batch_time_s / args.num_seeds)   # sec (단위 통일)
+        _per_sample_sec = (_batch_time_s / (N * S))        # sec (단위 통일)
         _total_time_s += _batch_time_s
         _total_peak_gb = max(_total_peak_gb, _batch_peak_gb)
 
         # save  (init_score_noise 라벨링 표준: img_{prompt:04d}_{sample:02d}.png)
-        for j in range(args.num_seeds):
-            fname = f"img_{i:04d}_{j:02d}.png"
-            save_image(img_batch[j], os.path.join(result_dir, fname))
-            comp_rows.append((i * args.num_seeds + j, _per_sample_sec, _batch_peak_gb))
-            print(f"  sample[{j}] -> result/{fname}  (batch noise from single seed={args.base_seed})")
+        for n in range(N):
+            for j in range(S):
+                idx = n * S + j
+                fname = f"img_{i0+n:04d}_{j:02d}.png"
+                save_image(img_batch[idx], os.path.join(result_dir, fname))
+                comp_rows.append(((i0 + n) * S + j, _per_sample_sec, _batch_peak_gb))
+                print(f"  sample[{idx}] -> result/{fname}")
 
     # ---- comp_metrics.csv: per-sample time/VRAM + mean/std ----
     import statistics as _st

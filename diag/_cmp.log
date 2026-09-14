@@ -1,3 +1,0 @@
-t_idx=1: |g_adj|=5.3335e+00  |g_auto|=1.4285e+01  rel_err=1.132e+00  cos_sim=-0.1895  ratio_adj/auto=0.373  MISMATCH
-t_idx=2: |g_adj|=1.2174e+01  |g_auto|=3.2306e+01  rel_err=6.916e-01  cos_sim=+0.8806  ratio_adj/auto=0.377  MISMATCH
-t_idx=3: |g_adj|=1.0618e+01  |g_auto|=2.0679e+01  rel_err=5.076e-01  cos_sim=+0.9796  ratio_adj/auto=0.513  MISMATCH

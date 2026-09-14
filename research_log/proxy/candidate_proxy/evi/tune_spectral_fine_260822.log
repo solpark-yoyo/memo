@@ -1,0 +1,346 @@
+=========================================
+  x_t Spectral Optimization (lr sweep) — Chen
+  model=stable-diffusion-v1-4  NFE=50  CFG=7.5  seed=42
+  init_steps=2  num_steps=5  gap=4
+  cfg_start_ratio=0.05  block_size=16  batch=5
+  lr_list=(0.06 0.10)
+  trd_path=workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4
+=========================================
+
+---- lr=0.06 ----
+============================================================
+optimize_xt_spectral
+  model     : ckpt/stable-diffusion-v1-4
+  NFE=50  CFG=7.5  seed=42
+  loss_type = xt  (x_t 직접 (FFT only))
+  init_steps=2  num_steps=5  gap=4
+  update_indices = [2, 6, 10, 14, 18]
+  lr=0.06  block_size=16  batch=5
+  prompt_dir=examples/assets/cvpr2025_memo_prompt.txt  num_samples=10
+============================================================
+Loading pipeline components...:   0%|          | 0/7 [00:00<?, ?it/s]Loading pipeline components...:  29%|██▊       | 2/7 [00:00<00:00, 11.79it/s]Loading pipeline components...:  57%|█████▋    | 4/7 [00:00<00:00,  8.10it/s]Loading pipeline components...:  71%|███████▏  | 5/7 [00:00<00:00,  6.39it/s]Loading pipeline components...:  86%|████████▌ | 6/7 [00:00<00:00,  6.37it/s]Loading pipeline components...: 100%|██████████| 7/7 [00:00<00:00,  7.84it/s]
+
+[1/10] ""email, envelope, mail icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9900
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.990022
+    [2/5] t_idx=6: proxy=0.893191
+    [3/5] t_idx=10: proxy=0.807850
+    [4/5] t_idx=14: proxy=0.717051
+    [5/5] t_idx=18: proxy=0.631795
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0000_*.png  proxy/proxy_0000.csv
+
+[2/10] ""communication, email, mail, message, online, open icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0048
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=1.004768
+    [2/5] t_idx=6: proxy=0.917629
+    [3/5] t_idx=10: proxy=0.838739
+    [4/5] t_idx=14: proxy=0.757934
+    [5/5] t_idx=18: proxy=0.685393
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0001_*.png  proxy/proxy_0001.csv
+
+[3/10] "The No Limits Business Woman Podcast"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9973
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.997300
+    [2/5] t_idx=6: proxy=0.922579
+    [3/5] t_idx=10: proxy=0.860642
+    [4/5] t_idx=14: proxy=0.829114
+    [5/5] t_idx=18: proxy=0.807256
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0002_*.png  proxy/proxy_0002.csv
+
+[4/10] ""lock, locked, padlock, protected, protection, security icon"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0040
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=1.003995
+    [2/5] t_idx=6: proxy=0.910182
+    [3/5] t_idx=10: proxy=0.821655
+    [4/5] t_idx=14: proxy=0.735628
+    [5/5] t_idx=18: proxy=0.657352
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0003_*.png  proxy/proxy_0003.csv
+
+[5/10] """"3M™ Privacy Filter for 24"""" Widescreen Monitor (16:10) "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9907
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.990708
+    [2/5] t_idx=6: proxy=0.895342
+    [3/5] t_idx=10: proxy=0.798779
+    [4/5] t_idx=14: proxy=0.700662
+    [5/5] t_idx=18: proxy=0.605919
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0004_*.png  proxy/proxy_0004.csv
+
+[6/10] ""document,print,preview icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9966
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.996552
+    [2/5] t_idx=6: proxy=0.897586
+    [3/5] t_idx=10: proxy=0.809158
+    [4/5] t_idx=14: proxy=0.718941
+    [5/5] t_idx=18: proxy=0.635221
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0005_*.png  proxy/proxy_0005.csv
+
+[7/10] "Full body U-Zip main opening - Full body U-Zip main opening "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0024
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=1.002439
+    [2/5] t_idx=6: proxy=0.935692
+    [3/5] t_idx=10: proxy=0.954248
+    [4/5] t_idx=14: proxy=1.050819
+    [5/5] t_idx=18: proxy=1.141651
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0006_*.png  proxy/proxy_0006.csv
+
+[8/10] "Mothers influence on her young hippo"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0035
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=1.003480
+    [2/5] t_idx=6: proxy=0.924066
+    [3/5] t_idx=10: proxy=0.849132
+    [4/5] t_idx=14: proxy=0.819017
+    [5/5] t_idx=18: proxy=0.822822
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0007_*.png  proxy/proxy_0007.csv
+
+[9/10] "<i>Dreamfall Chapters: The Longest Journey</i> Will Be A Pla"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9995
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.999544
+    [2/5] t_idx=6: proxy=0.936658
+    [3/5] t_idx=10: proxy=0.946701
+    [4/5] t_idx=14: proxy=1.010435
+    [5/5] t_idx=18: proxy=1.069772
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0008_*.png  proxy/proxy_0008.csv
+
+[10/10] ""deadline, hourglass, time management, timer icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9994
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.06  (batch=5)
+    [1/5] t_idx=2: proxy=0.999423
+    [2/5] t_idx=6: proxy=0.909954
+    [3/5] t_idx=10: proxy=0.828361
+    [4/5] t_idx=14: proxy=0.752993
+    [5/5] t_idx=18: proxy=0.689016
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0009_*.png  proxy/proxy_0009.csv
+
+[Done] 10 prompts | 47.0s
+  result → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/result/
+  proxy  → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/proxy/
+[INFO] 351 reference 이미지 매핑 로드
+[Done] 6 prompts evaluated → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/chen_sscd_gt_metrics.csv
+  mean SSCD-to-GT: 0.1492
+  memorized (mean>0.5): 0/6
+[CKPT] Loading CLIP (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/clip-vit-base-patch16
+[CKPT] Loading PickScore processor (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/CLIP-ViT-H-14-laion2B-s32B-b79K
+[CKPT] Loading PickScore model (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/PickScore_v1
+[CKPT] Loading BERT tokenizer (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/bert-base-uncased
+[CKPT] Loading ImageReward (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/ImageReward/ImageReward.pt
+load checkpoint from /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/ImageReward/ImageReward.pt
+checkpoint loaded
+CLIPScore:   0%|          | 0/50 [00:00<?, ?it/s]CLIPScore:   2%|▏         | 1/50 [00:00<00:09,  5.07it/s]CLIPScore:  20%|██        | 10/50 [00:00<00:01, 38.95it/s]CLIPScore:  36%|███▌      | 18/50 [00:00<00:00, 52.99it/s]CLIPScore:  54%|█████▍    | 27/50 [00:00<00:00, 64.42it/s]CLIPScore:  70%|███████   | 35/50 [00:00<00:00, 68.61it/s]CLIPScore:  86%|████████▌ | 43/50 [00:00<00:00, 70.88it/s]CLIPScore: 100%|██████████| 50/50 [00:00<00:00, 61.81it/s]
+PickScore:   0%|          | 0/50 [00:00<?, ?it/s]PickScore:   8%|▊         | 4/50 [00:00<00:01, 37.29it/s]PickScore:  16%|█▌        | 8/50 [00:00<00:01, 38.35it/s]PickScore:  24%|██▍       | 12/50 [00:00<00:00, 38.22it/s]PickScore:  32%|███▏      | 16/50 [00:00<00:00, 37.85it/s]PickScore:  40%|████      | 20/50 [00:00<00:00, 37.99it/s]PickScore:  48%|████▊     | 24/50 [00:00<00:00, 38.26it/s]PickScore:  56%|█████▌    | 28/50 [00:00<00:00, 38.67it/s]PickScore:  64%|██████▍   | 32/50 [00:00<00:00, 38.24it/s]PickScore:  72%|███████▏  | 36/50 [00:00<00:00, 37.66it/s]PickScore:  80%|████████  | 40/50 [00:01<00:00, 37.69it/s]PickScore:  88%|████████▊ | 44/50 [00:01<00:00, 37.16it/s]PickScore:  96%|█████████▌| 48/50 [00:01<00:00, 37.64it/s]PickScore: 100%|██████████| 50/50 [00:01<00:00, 37.96it/s]
+ImageReward:   0%|          | 0/50 [00:00<?, ?it/s]ImageReward:  10%|█         | 5/50 [00:00<00:00, 48.07it/s]ImageReward:  22%|██▏       | 11/50 [00:00<00:00, 50.25it/s]ImageReward:  34%|███▍      | 17/50 [00:00<00:00, 50.04it/s]ImageReward:  46%|████▌     | 23/50 [00:00<00:00, 50.92it/s]ImageReward:  58%|█████▊    | 29/50 [00:00<00:00, 51.76it/s]ImageReward:  70%|███████   | 35/50 [00:00<00:00, 50.87it/s]ImageReward:  82%|████████▏ | 41/50 [00:00<00:00, 50.54it/s]ImageReward:  94%|█████████▍| 47/50 [00:00<00:00, 50.65it/s]ImageReward: 100%|██████████| 50/50 [00:00<00:00, 50.87it/s]
+[Done] Saved metrics to workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/chen_t2i_metrics.csv
+==================================================
+  CLIPScore  : 31.0497 ± 4.5330
+  PickScore  : 19.5120 ± 0.9943
+  ImageReward: 0.2624 ± 1.1036
+==================================================
+[Saved] workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/total_metrics.csv  (5 metrics)
+  [CHECK] eval:
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/chen_sscd_gt_metrics.csv
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/chen_t2i_metrics.csv
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.06/seed=42/batch=5/eval/total_metrics.csv
+
+---- lr=0.10 ----
+============================================================
+optimize_xt_spectral
+  model     : ckpt/stable-diffusion-v1-4
+  NFE=50  CFG=7.5  seed=42
+  loss_type = xt  (x_t 직접 (FFT only))
+  init_steps=2  num_steps=5  gap=4
+  update_indices = [2, 6, 10, 14, 18]
+  lr=0.1  block_size=16  batch=5
+  prompt_dir=examples/assets/cvpr2025_memo_prompt.txt  num_samples=10
+============================================================
+Loading pipeline components...:   0%|          | 0/7 [00:00<?, ?it/s]Loading pipeline components...:  14%|█▍        | 1/7 [00:00<00:02,  2.97it/s]Loading pipeline components...:  43%|████▎     | 3/7 [00:00<00:00,  4.75it/s]Loading pipeline components...:  86%|████████▌ | 6/7 [00:00<00:00,  8.40it/s]Loading pipeline components...: 100%|██████████| 7/7 [00:00<00:00,  8.20it/s]
+
+[1/10] ""email, envelope, mail icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9900
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.990022
+    [2/5] t_idx=6: proxy=0.831659
+    [3/5] t_idx=10: proxy=0.692575
+    [4/5] t_idx=14: proxy=0.564792
+    [5/5] t_idx=18: proxy=0.450001
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0000_*.png  proxy/proxy_0000.csv
+
+[2/10] ""communication, email, mail, message, online, open icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0048
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=1.004768
+    [2/5] t_idx=6: proxy=0.855050
+    [3/5] t_idx=10: proxy=0.731613
+    [4/5] t_idx=14: proxy=0.608244
+    [5/5] t_idx=18: proxy=0.503021
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0001_*.png  proxy/proxy_0001.csv
+
+[3/10] "The No Limits Business Woman Podcast"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9973
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.997300
+    [2/5] t_idx=6: proxy=0.869678
+    [3/5] t_idx=10: proxy=0.772157
+    [4/5] t_idx=14: proxy=0.733791
+    [5/5] t_idx=18: proxy=0.703731
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0002_*.png  proxy/proxy_0002.csv
+
+[4/10] ""lock, locked, padlock, protected, protection, security icon"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0040
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=1.003995
+    [2/5] t_idx=6: proxy=0.851752
+    [3/5] t_idx=10: proxy=0.714365
+    [4/5] t_idx=14: proxy=0.591582
+    [5/5] t_idx=18: proxy=0.489327
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0003_*.png  proxy/proxy_0003.csv
+
+[5/10] """"3M™ Privacy Filter for 24"""" Widescreen Monitor (16:10) "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9907
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.990708
+    [2/5] t_idx=6: proxy=0.832162
+    [3/5] t_idx=10: proxy=0.679496
+    [4/5] t_idx=14: proxy=0.542914
+    [5/5] t_idx=18: proxy=0.423090
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0004_*.png  proxy/proxy_0004.csv
+
+[6/10] ""document,print,preview icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9966
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.996552
+    [2/5] t_idx=6: proxy=0.836685
+    [3/5] t_idx=10: proxy=0.692366
+    [4/5] t_idx=14: proxy=0.563837
+    [5/5] t_idx=18: proxy=0.443972
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0005_*.png  proxy/proxy_0005.csv
+
+[7/10] "Full body U-Zip main opening - Full body U-Zip main opening "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0024
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=1.002439
+    [2/5] t_idx=6: proxy=0.879704
+    [3/5] t_idx=10: proxy=0.862068
+    [4/5] t_idx=14: proxy=0.941446
+    [5/5] t_idx=18: proxy=1.033410
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0006_*.png  proxy/proxy_0006.csv
+
+[8/10] "Mothers influence on her young hippo"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0035
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=1.003480
+    [2/5] t_idx=6: proxy=0.868361
+    [3/5] t_idx=10: proxy=0.761679
+    [4/5] t_idx=14: proxy=0.720605
+    [5/5] t_idx=18: proxy=0.716544
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0007_*.png  proxy/proxy_0007.csv
+
+[9/10] "<i>Dreamfall Chapters: The Longest Journey</i> Will Be A Pla"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9995
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.999544
+    [2/5] t_idx=6: proxy=0.884487
+    [3/5] t_idx=10: proxy=0.863170
+    [4/5] t_idx=14: proxy=0.905517
+    [5/5] t_idx=18: proxy=0.959201
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0008_*.png  proxy/proxy_0008.csv
+
+[10/10] ""deadline, hourglass, time management, timer icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9994
+  [optimize] loss=xt  updates=[2, 6, 10, 14, 18]  lr=0.1  (batch=5)
+    [1/5] t_idx=2: proxy=0.999423
+    [2/5] t_idx=6: proxy=0.847209
+    [3/5] t_idx=10: proxy=0.714871
+    [4/5] t_idx=14: proxy=0.601407
+    [5/5] t_idx=18: proxy=0.502667
+  [forward] DDIM step 23 → 49 (no grad)
+  → result/img_0009_*.png  proxy/proxy_0009.csv
+
+[Done] 10 prompts | 46.9s
+  result → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/result/
+  proxy  → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/proxy/
+[INFO] 351 reference 이미지 매핑 로드
+[Done] 6 prompts evaluated → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/chen_sscd_gt_metrics.csv
+  mean SSCD-to-GT: 0.1302
+  memorized (mean>0.5): 0/6
+[CKPT] Loading CLIP (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/clip-vit-base-patch16
+[CKPT] Loading PickScore processor (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/CLIP-ViT-H-14-laion2B-s32B-b79K
+[CKPT] Loading PickScore model (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/PickScore_v1
+[CKPT] Loading BERT tokenizer (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/bert-base-uncased
+[CKPT] Loading ImageReward (local): /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/ImageReward/ImageReward.pt
+load checkpoint from /home/geonsoo/Desktop/Datasets/Parksol/memo/ori_memo/ckpt/ImageReward/ImageReward.pt
+checkpoint loaded
+CLIPScore:   0%|          | 0/50 [00:00<?, ?it/s]CLIPScore:   2%|▏         | 1/50 [00:00<00:09,  5.14it/s]CLIPScore:  20%|██        | 10/50 [00:00<00:00, 40.77it/s]CLIPScore:  38%|███▊      | 19/50 [00:00<00:00, 56.82it/s]CLIPScore:  58%|█████▊    | 29/50 [00:00<00:00, 69.08it/s]CLIPScore:  74%|███████▍  | 37/50 [00:00<00:00, 71.58it/s]CLIPScore:  90%|█████████ | 45/50 [00:00<00:00, 73.44it/s]CLIPScore: 100%|██████████| 50/50 [00:00<00:00, 63.94it/s]
+PickScore:   0%|          | 0/50 [00:00<?, ?it/s]PickScore:   8%|▊         | 4/50 [00:00<00:01, 39.84it/s]PickScore:  18%|█▊        | 9/50 [00:00<00:01, 40.00it/s]PickScore:  26%|██▌       | 13/50 [00:00<00:00, 38.99it/s]PickScore:  34%|███▍      | 17/50 [00:00<00:00, 38.32it/s]PickScore:  42%|████▏     | 21/50 [00:00<00:00, 38.46it/s]PickScore:  50%|█████     | 25/50 [00:00<00:00, 38.83it/s]PickScore:  60%|██████    | 30/50 [00:00<00:00, 39.57it/s]PickScore:  68%|██████▊   | 34/50 [00:00<00:00, 38.39it/s]PickScore:  76%|███████▌  | 38/50 [00:00<00:00, 38.00it/s]PickScore:  84%|████████▍ | 42/50 [00:01<00:00, 37.49it/s]PickScore:  92%|█████████▏| 46/50 [00:01<00:00, 37.25it/s]PickScore: 100%|██████████| 50/50 [00:01<00:00, 37.89it/s]PickScore: 100%|██████████| 50/50 [00:01<00:00, 38.32it/s]
+ImageReward:   0%|          | 0/50 [00:00<?, ?it/s]ImageReward:  12%|█▏        | 6/50 [00:00<00:00, 51.47it/s]ImageReward:  24%|██▍       | 12/50 [00:00<00:00, 51.04it/s]ImageReward:  36%|███▌      | 18/50 [00:00<00:00, 50.54it/s]ImageReward:  48%|████▊     | 24/50 [00:00<00:00, 52.03it/s]ImageReward:  60%|██████    | 30/50 [00:00<00:00, 53.23it/s]ImageReward:  72%|███████▏  | 36/50 [00:00<00:00, 51.58it/s]ImageReward:  84%|████████▍ | 42/50 [00:00<00:00, 50.80it/s]ImageReward:  96%|█████████▌| 48/50 [00:00<00:00, 50.95it/s]ImageReward: 100%|██████████| 50/50 [00:00<00:00, 51.44it/s]
+[Done] Saved metrics to workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/chen_t2i_metrics.csv
+==================================================
+  CLIPScore  : 30.8291 ± 4.5984
+  PickScore  : 19.3824 ± 1.0625
+  ImageReward: -0.0504 ± 1.3043
+==================================================
+[Saved] workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/total_metrics.csv  (5 metrics)
+  [CHECK] eval:
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/chen_sscd_gt_metrics.csv
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/chen_t2i_metrics.csv
+workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/lr=0.10/seed=42/batch=5/eval/total_metrics.csv
+
+==== [trade-off] collect_trd + plot_trd → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/ ====
+  label=0.06   CLIP=31.049707 Pick=19.511993 ImgR=0.262360 SSCD=0.149243 (eval: OK)
+  label=0.10   CLIP=30.829060 Pick=19.382372 ImgR=-0.050411 SSCD=0.130206 (eval: OK)
+
+[Done] 2 rows (init_opti)
+  workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/csv/total_log.csv
+  workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/csv/total_metrics.csv
+  workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/plot/  (plot 용 빈 폴더)
+[plot] workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/plot/tradeoff_clipscore.png  (2 points)
+[plot] workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/plot/tradeoff_pickscore.png  (2 points)
+[plot] workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/plot/tradeoff_imagereward.png  (2 points)
+
+[Done] → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.05/init=2/nsteps=5/gap=4/trd/{csv,plot}/

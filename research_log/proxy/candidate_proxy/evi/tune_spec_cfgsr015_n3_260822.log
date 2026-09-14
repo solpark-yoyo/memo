@@ -1,0 +1,125 @@
+=========================================
+  x_t Spectral Optimization (lr sweep) — Chen
+  model=stable-diffusion-v1-4  NFE=50  CFG=7.5  seed=42
+  init_steps=2  num_steps=3  gap=4
+  cfg_start_ratio=0.15  block_size=16  batch=5
+  lr_list=(0.00 0.04 0.08 0.12)
+  trd_path=workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.15/init=2/nsteps=3/gap=4
+=========================================
+
+---- lr=0.00 ----
+============================================================
+optimize_xt_spectral
+  model     : ckpt/stable-diffusion-v1-4
+  NFE=50  CFG=7.5  seed=42
+  loss_type = xt  (x_t 직접 (FFT only))
+  init_steps=2  num_steps=3  gap=4
+  update_indices = [2, 6, 10]
+  lr=0.0  block_size=16  batch=5
+  prompt_dir=examples/assets/cvpr2025_memo_prompt.txt  num_samples=10
+============================================================
+Loading pipeline components...:   0%|          | 0/7 [00:00<?, ?it/s]Loading pipeline components...:  14%|█▍        | 1/7 [00:00<00:02,  2.85it/s]Loading pipeline components...:  43%|████▎     | 3/7 [00:00<00:00,  6.57it/s]Loading pipeline components...: 100%|██████████| 7/7 [00:00<00:00,  8.95it/s]Loading pipeline components...: 100%|██████████| 7/7 [00:00<00:00,  7.89it/s]
+
+[1/10] ""email, envelope, mail icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9906
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.990599
+    [2/3] t_idx=6: proxy=0.983699
+    [3/3] t_idx=10: proxy=0.965239
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0000_*.png  proxy/proxy_0000.csv
+
+[2/10] ""communication, email, mail, message, online, open icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0029
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=1.002941
+    [2/3] t_idx=6: proxy=0.998864
+    [3/3] t_idx=10: proxy=1.002820
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0001_*.png  proxy/proxy_0001.csv
+
+[3/10] "The No Limits Business Woman Podcast"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9925
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.992542
+    [2/3] t_idx=6: proxy=0.987468
+    [3/3] t_idx=10: proxy=1.008663
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0002_*.png  proxy/proxy_0002.csv
+
+[4/10] ""lock, locked, padlock, protected, protection, security icon"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0038
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=1.003835
+    [2/3] t_idx=6: proxy=0.998732
+    [3/3] t_idx=10: proxy=0.988442
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0003_*.png  proxy/proxy_0003.csv
+
+[5/10] """"3M™ Privacy Filter for 24"""" Widescreen Monitor (16:10) "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9907
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.990675
+    [2/3] t_idx=6: proxy=0.984930
+    [3/3] t_idx=10: proxy=0.975633
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0004_*.png  proxy/proxy_0004.csv
+
+[6/10] ""document,print,preview icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9966
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.996635
+    [2/3] t_idx=6: proxy=0.990900
+    [3/3] t_idx=10: proxy=0.980926
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0005_*.png  proxy/proxy_0005.csv
+
+[7/10] "Full body U-Zip main opening - Full body U-Zip main opening "
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 1.0014
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=1.001392
+    [2/3] t_idx=6: proxy=0.995160
+    [3/3] t_idx=10: proxy=1.011034
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0006_*.png  proxy/proxy_0006.csv
+
+[8/10] "Mothers influence on her young hippo"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9970
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.997042
+    [2/3] t_idx=6: proxy=0.992714
+    [3/3] t_idx=10: proxy=1.010246
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0007_*.png  proxy/proxy_0007.csv
+
+[9/10] "<i>Dreamfall Chapters: The Longest Journey</i> Will Be A Pla"
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9999
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.999885
+    [2/3] t_idx=6: proxy=0.991588
+    [3/3] t_idx=10: proxy=1.010128
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0008_*.png  proxy/proxy_0008.csv
+
+[10/10] ""deadline, hourglass, time management, timer icon""
+  [forward] DDIM 0 → step 2 (no grad)
+    reached step 2, proxy[xt] = 0.9985
+  [optimize] loss=xt  updates=[2, 6, 10]  lr=0.0  (batch=5)
+    [1/3] t_idx=2: proxy=0.998495
+    [2/3] t_idx=6: proxy=0.992945
+    [3/3] t_idx=10: proxy=0.989722
+  [forward] DDIM step 15 → 49 (no grad)
+  → result/img_0009_*.png  proxy/proxy_0009.csv
+
+[Done] 10 prompts | 46.5s
+  result → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.15/init=2/nsteps=3/gap=4/lr=0.00/seed=42/batch=5/result/
+  proxy  → workdir/memorization/sd14_base/spectral_opt/CFG=7.5_NFE=50/cfgsr=0.15/init=2/nsteps=3/gap=4/lr=0.00/seed=42/batch=5/proxy/

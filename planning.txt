@@ -405,7 +405,7 @@ deferringㅇㅔ서 cfg를 null말고 conditioning을 넣기
 
 먼저 [1] Perf 에서는 
 다양한 framework 변화 제시가 있었는데,
-- (Easy) Deferring에서 cfg를 null말고 conditioning을 넣기
+- (Easy) Deferring에서 cfg를 null말고 conditioning을 넣기 (FLUX에서만)
 - (Easy) Pre Conditioning(ICML2026) <-- 하지만 우리의 framework는 아니기는 하나, 시도해볼 가치는 있다.
 - (Easy) 4 Step DDIM scheduler
 
@@ -444,3 +444,59 @@ Eval_wen(ckpt) : sd14_memor_LAION2B_40k
 코드 구축 완료 --> 소내 반입 후 수행
 
 2. (Easy) 구현
+
+
+# 260720 (Sun)
+
+Framework
+- [해결] (Easy) Deferring에서 cfg를 null말고 conditioning을 넣기 (FLUX에서만)
+- (Easy) Pre Conditioning(ICML2026) <-- 하지만 우리의 framework는 아니기는 하나, 시도해볼 가치는 있다.
+- (Easy) 4 Step DDIM scheduler
+
+Cost, 더 나아가서 perf도
+- (Medium) Inference Time에서 cfg_noise의 gaussianity가 memorization 에 관련 있을 수도 있다.
+- (Hard) Look ahead sample(CVPR 2025 Spotlight)
+
+
+
+오늘 목표: 
+(Easy) Pre Conditioning(ICML2026) <-- 하지만 우리의 framework는 아니기는 하나, 시도해볼 가치는 있다.
+
+FLUX-schnell인 one-step Flow matching 기반 모델에서 검증이 되었다. 과연 sd1.4에서도 적용이 될까?
+사실 이론적으로 gper을 적용했을때 memorization 성능이 오르는 이론적인 근거는 마땅히 떠오르지 않는다.
+=> 사실 memorization task에서 gaussianity가 중요할까? latent든 cfg이든 간에.
+=> 만약에 initial noise의 gaussinity가 중요하다면 성능이 좋아질 것 같다.
+=> 하지만 위 내용도 다소 어폐가 있기는 하다.
+
+# 260721(mon): gper
+
+How to do today...
+
+- eval_chen: 
+gper checking (+ scale up)
+eval_chen Trend Checking
+
+
+lookahead proxy: 잠정 완료
+gper 코드 점검: 확인 완료
+전반적인 코드 점검: 
+
+# 260801 (Sun)
+gaussian 관련도 확인: 
+
+음 이것도 sd14에 대해서 해야겠다.
+gaussianity
+- KL
+- white gaussianity
+
+Accumulate proxy 진행: 
++ proxy와 memo의 이론적 기반: 
+
+# 260807 (Fri): Spectrum Method 진행
+
+score에 대한 Spectrum Energy Trend 관찰
+
+energy 증가 원인이 Low 인지 High 인지 관찰 => 만약에 Low라면 추천해주신 논문과 관련있을 수도?
+
+(기존 Memorization에서 Ours(Inference optimization)가 왜 Memorization을 해결했는지에 대한 이론적 기반이 있는가? 
+: Score를 만지면 Memo와 관련있다라는 잠정적 기반 말고 )

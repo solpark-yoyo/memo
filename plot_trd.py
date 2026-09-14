@@ -36,18 +36,24 @@ def main():
         pts = []
         for r in rows:
             try:
-                pts.append((float(r[x_key]), float(r[args.y_metric])))
+                pts.append((float(r[x_key]), float(r[args.y_metric]), r.get("label", "")))
             except (ValueError, KeyError):
                 continue
         if not pts:
-            print(f"[skip] {x_name}: 유효 점 없음")
+            print(f"[skip] {x_name}: no valid points")
             continue
         pts.sort(key=lambda p: p[0])
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        labels = [p[2] for p in pts]
 
         plt.figure(figsize=(7, 5))
         plt.plot(xs, ys, color="#1f77b4", marker="o", linewidth=2.2, markersize=9,
-                 label="lr sweep")
+                 label="knob sweep")
+        # 각 점 위에 knob 값(label) 표기
+        for x, y, lab in zip(xs, ys, labels):
+            if lab:
+                plt.annotate(str(lab), (x, y), textcoords="offset points",
+                             xytext=(0, 10), ha="center", fontsize=10, color="#333")
         plt.xlabel(x_name, fontsize=12)
         plt.ylabel(f"{args.y_metric} (memorization, ↓ better)", fontsize=12)
         plt.title(f"{args.y_metric} vs {x_name} — trade-off", fontsize=12)

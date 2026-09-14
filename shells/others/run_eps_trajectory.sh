@@ -17,9 +17,17 @@ batch=5
 num_images_per_prompt=${batch}
 NUM_SAMPLES=${num_images_per_prompt}     # images per prompt (different seed each)
 DEVICE="cuda:${gpu}"
+MEASURE="${MEASURE:-memo_proxy}"         # memo_proxy | kl_div  (측정 metric toggle)
 
-# save path: results_eps_trajectory/ddim/CFG/seed/batch
-base_dir="results_eps_trajectory"
+# save path: measure 에 따라 base_dir 분리
+exp_root="${EXP_ROOT:-workdir/exp_main/eps_trajectory}"
+if [[ "${MEASURE}" == "kl_div" ]]; then
+  base_dir="${exp_root}/results_kl_trajectory"
+elif [[ "${MEASURE}" == "cmp_l2" ]]; then
+  base_dir="${exp_root}/results_cmp_l2_trajectory"
+else
+  base_dir="${exp_root}/results_eps_trajectory"
+fi
 OUTPUT_DIR="${base_dir}/ddim/CFG=${cfg}_NFE=${NFE}/seed=${SEED}/batch=${batch}"
 
 # ---- Prompt config ----
@@ -37,6 +45,7 @@ echo "========================================="
 echo "  Epsilon Trajectory Analysis"
 echo "  NFE=${NFE}  CFG=${cfg}  SEED=${SEED}  NUM_SAMPLES=${NUM_SAMPLES}"
 echo "  num_tp=${num_tp}  num_mtp=${num_mtp}  num_plot=${num_plot}"
+echo "  measure=${MEASURE}"
 echo "  text_dir=${text_dir}"
 echo "  memo_dir=${memo_dir}"
 echo "========================================="
@@ -54,6 +63,7 @@ python eps_trajectory.py \
     --memo_dir ${memo_dir} \
     --num_tp ${num_tp} \
     --num_mtp ${num_mtp} \
-    --num_plot ${num_plot}
+    --num_plot ${num_plot} \
+    --measure ${MEASURE}
 
 echo "Done."

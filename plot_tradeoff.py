@@ -43,9 +43,12 @@ def main():
 
     plt.figure(figsize=(7, 5))
     colors = ["#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b"]
-    markers = {"ddim": "s", "cno_infoNCE": "^", "init_score_noise": "D", "init_opti": "o"}
+    markers = {"ddim": "s", "cno_infoNCE": "^", "init_score_noise": "D", "init_opti": "o",
+               "spectral_opt": "*", "jeon": "v", "ren": "P", "wen": "X"}
     label_map = {"ddim": "DDIM", "cno_infoNCE": "CNO",
-                 "init_score_noise": "init_score_opti", "init_opti": "Ours (init_opti)"}
+                 "init_score_noise": "Han (init_score_opti)", "init_opti": "Ours (init_opti)",
+                 "spectral_opt": "Ours (spectral eps)", "jeon": "Jeon (SAIL)",
+                 "ren": "Ren (MemAttn)", "wen": "Wen (prompt aug)"}
     # --methods 로 지정한 것만 / 순서대로 plot
     sel = [m.strip() for m in args.methods.split(",") if m.strip()]
     methods = [m for m in sel if m in groups] + [m for m in groups if m not in sel]

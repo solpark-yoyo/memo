@@ -48,32 +48,39 @@ def project_wgnc(y: Tensor, block_size: int = 16) -> Tensor:
             f"WGNC projection requires the flattened latent dimension to be divisible by {divisor}, "
             f"got {n}. Use a latent size divisible by {divisor} or change block_size."
         )
-    y = f_r_to_c(y.reshape(-1))
     eps = 1e-6
     gamma = math.pi / 4.0
     gamma_b = gamma * block_size
     start_j = math.floor(gamma_b)
 
-    y = y.reshape(-1, block_size)
-    ay = torch.abs(y)
+    # Compact Spectrum Vector    
+    y = f_r_to_c(y.reshape(-1))
+    # Block Reshape + Magnitude Extraction
+    y = y.reshape(-1, block_size) # y.shape = [-1 , Block_size]
+    ay = torch.abs(y) # go to "clipped = torch.clamp(ay - lam, min=0.0)"
+    # Magnitude Projection w.r.t. white gaussian noise fessiable set.
+
+        # Axiliary Part(tie-break noise): It is not used in most case (if maxcount > start_j)
+        # max_count: The number of maximun for each of block (often [[1],[1], ... , [1]])
     max_count = torch.sum(ay == torch.max(ay, dim=1, keepdim=True)[0], dim=1, keepdim=True)
     y = torch.where(start_j < max_count, y + torch.randn_like(y) * eps, y)
-
+        # *** Threshold lam about eq.13***
     ay = torch.abs(y)
     w = torch.sort(ay, dim=1, descending=True)[0]
-    s1 = torch.cumsum(w, dim=1)[:, start_j:block_size]
-    s2 = torch.cumsum(w.square(), dim=1)[:, start_j:block_size]
+    s1 = torch.cumsum(w, dim=1)[:, start_j:block_size] # l1 norm
+    s2 = torch.cumsum(w.square(), dim=1)[:, start_j:block_size] # l2 norm
     j = torch.arange(start_j + 1, block_size + 1, device=y.device, dtype=y.real.dtype).view(1, -1)
-    lam = (s1 - (gamma_b / (j - gamma_b) * (j * s2 - s1.square())).clamp_min(0).sqrt()) / j
-
+    lam = (s1 - (gamma_b / (j - gamma_b) * (j * s2 - s1.square())).clamp_min(0).sqrt()) / j # Def about eq.13
+    
     max_lam = w[:, start_j:block_size]
     min_lam = torch.cat([w[:, start_j + 1:], torch.full_like(w[:, :1], -1e9)], dim=1)
-    lam = torch.where((max_lam > lam) & (lam >= min_lam), lam, torch.full_like(lam, -1e9))
-    lam = torch.sort(lam, dim=1, descending=True)[0][:, :1]
-
+    lam = torch.where((max_lam > lam) & (lam >= min_lam), lam, torch.full_like(lam, -1e9)) # valid selection eq.12
+    
+    lam = torch.sort(lam, dim=1, descending=True)[0][:, :1] # one threshold for each block (shape: (P,1))
+        # *** clipping using "threshold lam" about eq.14 ***
     clipped = torch.clamp(ay - lam, min=0.0)
     denom = torch.clamp(torch.sum(clipped, dim=1, keepdim=True), min=eps)
-    y = (gamma ** 0.5 * block_size) * (clipped / denom) * (y / torch.clamp(ay, min=eps))
+    y = (gamma ** 0.5 * block_size) * (clipped / denom) * (y / torch.clamp(ay, min=eps))  # eq.14
     return f_c_to_r(y.reshape(-1)).to(dtype).reshape(shape)
 
 
@@ -84,7 +91,7 @@ def project_wgnc_batched(x: Tensor, block_size: int = 16) -> Tensor:
     x: (B, C, H, W) latent/grad. Each sample (C*H*W) is projected independently.
     C*H*W must be divisible by 2*block_size (=32 for B=16).
     """
-    shape = x.shape
-    x_flat = x.reshape(shape[0], -1)
+    shape = x.shape # [B,C,H,W]
+    x_flat = x.reshape(shape[0], -1) # [B,C*H*W]
     out = torch.stack([project_wgnc(x_flat[i], block_size) for i in range(shape[0])], dim=0)
     return out.reshape(shape)
