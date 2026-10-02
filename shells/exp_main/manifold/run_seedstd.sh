@@ -28,7 +28,7 @@ NFE="${NFE:-50}"
 cfg="${CFG:-7.5}"
 SEED="${SEED:-42}"
 batch="${BATCH:-5}"              # num seeds per prompt (seed 축 std 계산 대상)
-n_prompts="${N_PROMPTS:-25}"    # 소스별 최대 요청 prompt 수 (파일이 작으면 clamp) — prompt 축 평균 대상
+n_prompts="${N_PROMPTS:-20}"    # 소스별 최대 요청 prompt 수 (파일이 작으면 clamp) — prompt 축 평균 대상
 DEVICE="cuda:${gpu}"
 
 model_key="${MODEL_KEY:-ckpt/${model}}"   # ckpt/ 레이아웃이 다르면 MODEL_KEY로 전체 경로 지정
@@ -36,7 +36,7 @@ out_root="${OUT_ROOT:-workdir/exp_main/manifold}"
 tag="${TAG:-general_memo}"
 
 # 캐시 무시하고 강제로 새 rollout: FORCE_ROLLOUT=1 bash ...
-force_rollout="${FORCE_ROLLOUT:-1}"
+force_rollout="${FORCE_ROLLOUT:-0}"
 force_flag=""
 if [[ "$force_rollout" == "1" ]] || [[ "$force_rollout" == "true" ]]; then
     force_flag="--force_rollout"

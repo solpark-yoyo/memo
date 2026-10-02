@@ -3,6 +3,18 @@ ckpt/
 datasets/
 __pycache__/
 *.pyc
+*.pyo
 examples/
 results_eps_trajectory/
 results_xT_opt/
+
+# 생성 이미지 / 배열
+*.png
+*.jpg
+*.jpeg
+*.npz
+*.npy
+
+# 로그 / 임시
+*.log
+*.pt

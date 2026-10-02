@@ -92,6 +92,8 @@ with open(f"{args.prompt}.txt", 'r') as file:
             prompts_all.append((line_id, line.strip()))
 
 nipp = args.num_images_per_prompt
+# record 루트: save_dir(=gen_dir/result)의 부모/record/per_prompt/img_{pid:04d}/
+_record_root = os.path.join(os.path.dirname(os.path.abspath(save_dir)), "record", "per_prompt")
 counter = 0
 t_total = 0.0
 for bstart in range(0, len(prompts_all), max(args.batch_txt, 1)):
@@ -100,11 +102,15 @@ for bstart in range(0, len(prompts_all), max(args.batch_txt, 1)):
     # seed: 배치 첫 line_id 기준 (batch_txt=1이면 기존 per-prompt 스트림과 동일)
     set_seed(chunk[0][0] + args.seed)
 
+    pid = chunk[0][0]
+    twd_record_dir = os.path.join(_record_root, f"img_{pid:04d}")
+
     # 단일 프롬pt는 문자열 그대로 전달 (기존 경로 100% 보존), 2개 이상만 list 배치
     pipe_input = [p for _, p in chunk] if len(chunk) > 1 else chunk[0][1]
     start = time()
     images = pipe(pipe_input, num_images_per_prompt=nipp,
-                  save_prefix=f"{save_dir}/{chunk[0][0]}", args=args).images
+                  save_prefix=f"{save_dir}/{chunk[0][0]}", args=args,
+                  twd_gap_record_dir=twd_record_dir).images
     dt = time() - start
     t_total += dt
 

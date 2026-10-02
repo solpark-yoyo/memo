@@ -1,3 +1,7 @@
+import sys, os
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../..')))
+from twd_gap_tracker import TwdGapTracker
+
 import torch
 
 from diffusers import StableDiffusionPipeline
@@ -88,6 +92,9 @@ class LocalStableDiffusionPipeline(StableDiffusionPipeline):
         cross_attention_kwargs=None,
         track_noise_norm=False,
         lp=2,
+        twd_gap_record_dir=None,
+        twd_gap_tag="wen_prompt_aug",
+        twd_gap_base_s_ratio=0.5,
     ):
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor
@@ -151,6 +158,11 @@ class LocalStableDiffusionPipeline(StableDiffusionPipeline):
                 uncond_noise_norm.append([])
                 text_noise_norm.append([])
 
+        # ---- twd_gap tracker setup ----
+        _twd_tracker = TwdGapTracker(self.unet, self.scheduler, prompt_embeds,
+                                      guidance_scale, latents.clone().detach(),
+                                      twd_gap_base_s_ratio) if twd_gap_record_dir is not None else None
+
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -179,6 +191,9 @@ class LocalStableDiffusionPipeline(StableDiffusionPipeline):
 
                     noise_pred = noise_pred_uncond + guidance_scale * noise_pred_text
 
+                if _twd_tracker is not None:
+                    _twd_tracker.record(latents, noise_pred, t, i)
+
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(
                     noise_pred, t, latents, **extra_step_kwargs, return_dict=False
@@ -198,6 +213,9 @@ class LocalStableDiffusionPipeline(StableDiffusionPipeline):
                             noise_pred_uncond[j].norm(p=lp).item()
                         )
                         text_noise_norm[j].append(noise_pred_text[j].norm(p=lp).item())
+
+        if _twd_tracker is not None:
+            _twd_tracker.save(twd_gap_record_dir, twd_gap_tag)
 
         if not output_type == "latent":
             image = self.vae.decode(

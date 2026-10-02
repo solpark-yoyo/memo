@@ -25,7 +25,7 @@ device="${DEVICE:-cuda:0}"            # argparse --device 로 직접 전달 (예
 NFE=50
 cfg_guidance=7.5
 seed=42
-num_samples=500
+num_samples=5
 batch=4
 num_images_per_prompt=${batch}
 

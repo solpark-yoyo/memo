@@ -19,7 +19,7 @@ gpu=0
 NFE=50
 cfg_initnoise=7.0          # 논문 기준 (SD v1.4)
 seed=42
-num_samples=500
+num_samples=5
 batch=4
 num_images_per_prompt=${batch}
 

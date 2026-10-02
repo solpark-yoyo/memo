@@ -217,7 +217,11 @@ def rollout_group(sd, prompts, seeds, cfg, device, batch_mean=True, shared_noise
 
     shared_noise (n, B, 4, 64, 64) 제공 시: prompt i의 시작점 = shared_noise[i]
     (ref forward noising과 같은 noise → step 0 거리 0)
-    미제공 시: 하나의 x_T 배치를 모든 prompt가 공유 (기존 방식)
+    미제공 시: **per-seed 독립** 방식으로 x_T 생성
+      (eps_trajectory.py analyze_multi_sample과 동일한 seeding):
+      for each seed in seeds:
+        torch.manual_seed(seed)
+        x_T_si = torch.randn(1, 4, 64, 64, ...) * init_noise_sigma
 
     Returns:
         pools : list[T] of tensor · timesteps · imgs
@@ -225,9 +229,15 @@ def rollout_group(sd, prompts, seeds, cfg, device, batch_mean=True, shared_noise
     timesteps = list(sd.scheduler.timesteps)
     B = len(seeds)
     if shared_noise is None:
-        torch.manual_seed(seeds[0])
-        x_T = torch.randn(B, 4, 64, 64, device=device, dtype=sd.dtype) \
-             * sd.scheduler.init_noise_sigma
+        # ★ per-seed 독립 x_T (eps_trajectory.py analyze_multi_sample 방식)
+        #   각 seed_i에 대해 torch.manual_seed(seed_i) 후 torch.randn(1, ...) → 정확히 재현
+        x_T_list = []
+        for seed in seeds:
+            torch.manual_seed(int(seed))
+            x_T_i = torch.randn(1, 4, 64, 64, device=device, dtype=sd.dtype) \
+                    * sd.scheduler.init_noise_sigma
+            x_T_list.append(x_T_i)
+        x_T = torch.cat(x_T_list, dim=0)  # (B, 4, 64, 64)
     pools = [[] for _ in timesteps]
     final_x0 = []
     for pi, prompt in enumerate(tqdm(prompts, desc="[rollout] prompts", unit="p")):
@@ -1058,6 +1068,169 @@ def analyze_cross_seed_twd_gap_deviation(source_gaps_dict, curve_base, args):
         print(f"[twd-gap-dev] [{group}] {name}: Plot saved -> {plot_path}")
 
 
+def save_per_prompt_curves(pools, prompts, seeds, raw_gaps, group, name,
+                           save_base, curve_base_latent_mag, curve_base_twd_gap, args):
+    """Per-prompt 개별 plot + CSV 저장.
+
+    latent_mag:
+      plot: <curve_base_latent_mag>/plot/per_prompt/{group}/{name}/plot_{pi:02d}.png
+      csv:  <curve_base_latent_mag>/csv/per_prompt/{group}/{name}/plot_{pi:02d}.csv
+      내용: latent magnitude (B seeds) + twd_gap (B seeds, 있을 때)
+
+    twd_gap (raw_gaps 있을 때만):
+      csv:  <save_base>/{group}/{name}/record/twd_gap/per_prompt/plot_{pi:02d}.csv
+      plot: <curve_base_twd_gap>/plot/per_prompt/{group}/{name}/plot_{pi:02d}.png
+
+    CSV 공통 형식:
+      행 1: prompt, <prompt text>
+      행 2: (빈 행)
+      행 3~: step, time, <data columns>
+
+    Args:
+        pools                : list[T] of tensor (n*B, 4, 64, 64) — batch_mean=False
+        prompts              : list[str]
+        seeds                : list[int]
+        raw_gaps             : np.ndarray (T, n, B) or None
+        group                : 'general' | 'memo'
+        name                 : source name (e.g. 'coco_v2', 'webster')
+        save_base            : workdir save root (save/{group}/{name} 상위)
+        curve_base_latent_mag: curve_base/latent_mag 경로
+        curve_base_twd_gap   : curve_base/twd_gap 경로
+        args                 : Namespace (args.NFE 사용)
+    """
+    n = len(prompts)
+    B = len(seeds)
+    T = len(pools)
+
+    has_twd = raw_gaps is not None  # (T, n, B)
+
+    # latent_mag per_prompt 디렉토리
+    lm_plot_dir = os.path.join(curve_base_latent_mag, "plot", "per_prompt", group, name)
+    lm_csv_dir  = os.path.join(curve_base_latent_mag, "csv",  "per_prompt", group, name)
+    os.makedirs(lm_plot_dir, exist_ok=True)
+    os.makedirs(lm_csv_dir,  exist_ok=True)
+
+    # twd_gap per_prompt 디렉토리 (twd 있을 때만)
+    if has_twd:
+        # CSV: save/{group}/{name}/record/twd_gap/per_prompt/
+        twd_csv_dir  = os.path.join(save_base, group, name, "record", "twd_gap", "per_prompt")
+        # Plot: curve/.../twd_gap/plot/per_prompt/{group}/{name}/
+        twd_plot_dir = os.path.join(curve_base_twd_gap, "plot", "per_prompt", group, name)
+        os.makedirs(twd_csv_dir,  exist_ok=True)
+        os.makedirs(twd_plot_dir, exist_ok=True)
+
+    # latent magnitude (T, n, B)
+    mag_all = np.stack(
+        [pl.float().reshape(n, B, -1).norm(dim=2).numpy() for pl in pools],
+        axis=0
+    )  # (T, n, B)
+
+    times = [args.NFE - s for s in range(T)]
+
+    def _prompt_header(w, prompt):
+        w.writerow(['prompt', prompt])
+        w.writerow([])
+
+    for pi in range(n):
+        prompt = prompts[pi]
+        mag_pi = mag_all[:, pi, :]                         # (T, B)
+        gap_pi = raw_gaps[:, pi, :] if has_twd else None  # (T, B)
+
+        # ================================================================
+        # 1) latent_mag CSV — mag + twd_gap (있을 때)
+        # ================================================================
+        with open(os.path.join(lm_csv_dir, f"plot_{pi:02d}.csv"), 'w', newline='') as f:
+            w = csv.writer(f)
+            _prompt_header(w, prompt)
+            header = ['step', 'time'] + [f'mag_seed_{si}' for si in range(B)]
+            if has_twd:
+                header += [f'twd_gap_seed_{si}' for si in range(B)]
+            w.writerow(header)
+            for s in range(T):
+                row = [s, times[s]] + [f'{mag_pi[s, si]:.6f}' for si in range(B)]
+                if has_twd:
+                    row += [f'{gap_pi[s, si]:.6f}' for si in range(B)]
+                w.writerow(row)
+
+        # ================================================================
+        # 2) latent_mag Plot — latent mag (상단) + twd_gap (하단, 있을 때)
+        # ================================================================
+        n_axes = 2 if has_twd else 1
+        fig, axes = plt.subplots(n_axes, 1, figsize=(10, 5 * n_axes), squeeze=False)
+
+        ax = axes[0, 0]
+        for si in range(B):
+            ax.plot(times, mag_pi[:, si], alpha=0.75, linewidth=1.5,
+                    label=f'seed {seeds[si]}')
+        ax.set_xlabel(r"Time ($t$)", fontsize=12)
+        ax.set_ylabel(r"$\|z_t\|$", fontsize=12)
+        ax.set_xlim(args.NFE, 0)
+        ax.set_title(f"Latent Magnitude  [{group}] {name} — prompt {pi:02d}", fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+        ax.text(0.01, 0.97, prompt[:90], transform=ax.transAxes,
+                fontsize=7, va='top', color='#555555',
+                bbox=dict(boxstyle='round,pad=0.2', fc='lightyellow', alpha=0.5))
+
+        if has_twd:
+            ax2 = axes[1, 0]
+            for si in range(B):
+                ax2.plot(times, gap_pi[:, si], alpha=0.75, linewidth=1.5,
+                         label=f'seed {seeds[si]}')
+            ax2.set_xlabel(r"Time ($t$)", fontsize=12)
+            ax2.set_ylabel(r"$\|x_T - \epsilon_s\|^2 / D$", fontsize=12)
+            ax2.set_xlim(args.NFE, 0)
+            ax2.set_title(f"Tweedie Gap  [{group}] {name} — prompt {pi:02d}", fontsize=11)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(lm_plot_dir, f"plot_{pi:02d}.png"), dpi=150)
+        plt.close()
+
+        if not has_twd:
+            continue
+
+        # ================================================================
+        # 3) twd_gap CSV — save/{group}/{name}/record/twd_gap/per_prompt/
+        # ================================================================
+        with open(os.path.join(twd_csv_dir, f"plot_{pi:02d}.csv"), 'w', newline='') as f:
+            w = csv.writer(f)
+            _prompt_header(w, prompt)
+            header = ['step', 'time'] + [f'twd_gap_seed_{si}' for si in range(B)]
+            w.writerow(header)
+            for s in range(T):
+                row = [s, times[s]] + [f'{gap_pi[s, si]:.6f}' for si in range(B)]
+                w.writerow(row)
+
+        # ================================================================
+        # 4) twd_gap Plot — curve/.../twd_gap/plot/per_prompt/{group}/{name}/
+        # ================================================================
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for si in range(B):
+            ax.plot(times, gap_pi[:, si], alpha=0.75, linewidth=1.5,
+                    label=f'seed {seeds[si]}')
+        ax.set_xlabel(r"Time ($t$)", fontsize=12)
+        ax.set_ylabel(r"$\|x_T - \epsilon_s\|^2 / D$", fontsize=12)
+        ax.set_xlim(args.NFE, 0)
+        ax.set_title(f"Tweedie Gap  [{group}] {name} — prompt {pi:02d}", fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+        ax.text(0.01, 0.97, prompt[:90], transform=ax.transAxes,
+                fontsize=7, va='top', color='#555555',
+                bbox=dict(boxstyle='round,pad=0.2', fc='lightyellow', alpha=0.5))
+        plt.tight_layout()
+        plt.savefig(os.path.join(twd_plot_dir, f"plot_{pi:02d}.png"), dpi=150)
+        plt.close()
+
+    print(f"[per_prompt] [{group}] {name}: {n} prompts")
+    print(f"  latent_mag plot → {lm_plot_dir}")
+    print(f"  latent_mag csv  → {lm_csv_dir}")
+    if has_twd:
+        print(f"  twd_gap    csv  → {twd_csv_dir}")
+        print(f"  twd_gap    plot → {twd_plot_dir}")
+
+
 def incremental_rollout_seedstd(sd, prompts, seeds, cfg, device, latent_path,
                                   latents_dir, group, name, args):
     """Load existing latent cache, check shape, and generate missing prompts incrementally.
@@ -1368,8 +1541,9 @@ def compute_twd_gap_from_pools(sd, pools, prompts, seeds, cfg, timesteps, device
 
     # ε_original from pool[0] (= x_T, initial noise) — per (prompt, seed) in fp32
     z_T = pools[0].to(device=device, dtype=torch.float32).reshape(n, B, 4, 64, 64)
-    # ε_ref: fresh random noise per (prompt, seed), same across steps
-    eps_ref_all = torch.randn(n, B, 4, 64, 64, device=device, dtype=torch.float32)
+
+    # ε_ref = x_T (self-referential) — eps_trajectory.py와 동일 방식
+    #   forward noise와 동일한 x_T를 reference로 사용 → late step에서 offset 없음
 
     with torch.no_grad():
         for t_idx, pool in enumerate(tqdm(pools, desc="[twd_gap] steps", unit="t")):
@@ -1401,8 +1575,8 @@ def compute_twd_gap_from_pools(sd, pools, prompts, seeds, cfg, timesteps, device
                 eps_s = (noise_uc_s.float()
                          + cfg * (noise_c_s.float() - noise_uc_s.float()))
 
-                # 5) gap = ‖ε_ref − ε_s‖² / D
-                eps_ref = eps_ref_all[pi]  # (B, 4, 64, 64)
+                # 5) gap = ‖ε_ref − ε_s‖² / D  (ε_ref = x_T, self-referential)
+                eps_ref = eps_original  # (B, 4, 64, 64) = z_T[pi]
                 diff = eps_ref - eps_s
                 distances = diff.pow(2).reshape(B, -1).sum(dim=1) / D  # (B,)
 
@@ -1419,6 +1593,126 @@ def compute_twd_gap_from_pools(sd, pools, prompts, seeds, cfg, timesteps, device
         "mean": np.array(twd_mean_curve),
         "raw_gaps": raw_gaps,
     }
+
+
+# ===================================================================
+#  twd_gap CSV caching (incremental, per-source)
+# ===================================================================
+
+def load_twd_gap_csv(csv_path, T, B):
+    """Load twd_gap raw CSV. Returns (raw_gaps (T, n_cached, B), n_cached) or (None, 0).
+
+    CSV format:
+      header: prompt_idx, seed_idx, step_0, step_1, ..., step_{T-1}
+      rows:   n_cached * B rows (one per (prompt, seed) combination)
+    """
+    if not os.path.exists(csv_path):
+        return None, 0
+    try:
+        with open(csv_path, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        if not rows:
+            return None, 0
+        header = rows[0]
+        data_rows = rows[1:]
+        step_cols = header[2:]
+        T_cached = len(step_cols)
+        if T_cached != T:
+            print(f"[twd_gap cache] T mismatch: cached={T_cached}, target={T} → invalidate")
+            return None, 0
+        if len(data_rows) % B != 0:
+            print(f"[twd_gap cache] row count {len(data_rows)} not divisible by B={B} → invalidate")
+            return None, 0
+        n_cached = len(data_rows) // B
+
+        raw = np.zeros((n_cached, B, T), dtype=np.float32)
+        for row in data_rows:
+            pi = int(row[0]); si = int(row[1])
+            if pi >= n_cached or si >= B:
+                continue
+            for t in range(T):
+                raw[pi, si, t] = float(row[2 + t])
+        raw_gaps = raw.transpose(2, 0, 1)  # (T, n_cached, B)
+        return raw_gaps, n_cached
+    except Exception as e:
+        print(f"[twd_gap cache] load failed ({type(e).__name__}: {e})")
+        return None, 0
+
+
+def save_twd_gap_csv(csv_path, raw_gaps):
+    """Save twd_gap raw values as CSV.
+
+    raw_gaps: (T, n, B) np.ndarray
+    CSV: header=[prompt_idx, seed_idx, step_0, ..., step_{T-1}], n*B rows.
+    """
+    T, n, B = raw_gaps.shape
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        header = ['prompt_idx', 'seed_idx'] + [f'step_{t}' for t in range(T)]
+        writer.writerow(header)
+        for pi in range(n):
+            for si in range(B):
+                row = [pi, si] + [f"{float(raw_gaps[t, pi, si]):.6f}" for t in range(T)]
+                writer.writerow(row)
+
+
+def incremental_twd_gap_compute(sd, pools, prompts, seeds, cfg, timesteps, device,
+                                 twd_gap_csv_path, target_step_ratio=0.5,
+                                 cached_raw=None, cached_n=0):
+    """Incremental twd_gap computation with CSV caching.
+
+    - cached_n < target_n: compute missing prompts only, append to cache
+    - no cache: compute all
+    (case cached_n >= target_n handled by caller — this function is only called when compute needed)
+
+    Returns:
+      raw_gaps: (T, target_n, B)
+      n_new: number of newly computed prompts
+    """
+    target_n = len(prompts)
+    B = len(seeds)
+    T = len(pools)
+
+    if sd is None:
+        raise RuntimeError("incremental_twd_gap_compute: sd is None but computation required")
+
+    if cached_raw is not None and cached_n < target_n:
+        # Incremental: compute missing prompts only
+        n_missing = target_n - cached_n
+        print(f"  ℹ INCREMENTAL: cached_n={cached_n}, target_n={target_n}, "
+              f"compute {n_missing} missing prompts")
+
+        # Slice pools for missing prompts (pool layout: prompt-major)
+        missing_prompts = prompts[cached_n:]
+        missing_pools = []
+        for pl in pools:
+            pl_reshaped = pl.reshape(target_n, B, 4, 64, 64)
+            missing_pools.append(pl_reshaped[cached_n:].reshape(-1, 4, 64, 64))
+
+        new_metrics = compute_twd_gap_from_pools(
+            sd, missing_pools, missing_prompts, seeds, cfg, timesteps, device,
+            target_step_ratio=target_step_ratio)
+        new_raw = new_metrics["raw_gaps"]  # (T, n_missing, B)
+
+        # Concatenate along prompt axis
+        raw_gaps = np.concatenate([cached_raw, new_raw], axis=1)  # (T, target_n, B)
+        n_new = n_missing
+    else:
+        # No cache — compute all
+        print(f"  ✗ NO CACHE: compute all {target_n} prompts")
+        new_metrics = compute_twd_gap_from_pools(
+            sd, pools, prompts, seeds, cfg, timesteps, device,
+            target_step_ratio=target_step_ratio)
+        raw_gaps = new_metrics["raw_gaps"]  # (T, target_n, B)
+        n_new = target_n
+
+    # Save updated CSV
+    save_twd_gap_csv(twd_gap_csv_path, raw_gaps)
+    print(f"  saved -> {twd_gap_csv_path}  (T={T}, n={target_n}, B={B})")
+
+    return raw_gaps, n_new
 
 
 def run_seedstd(sd, args, device):
@@ -1471,6 +1765,35 @@ def run_seedstd(sd, args, device):
         pools, n_new, imgs, prompt_offset = incremental_rollout_seedstd(
             sd, prompts, seeds, args.cfg, device, latent_path,
             latents_dir, group, name, args)
+
+        # ── Pretty-print returned values ─────────────────────────────────
+        _pool_shape = tuple(pools[0].shape) if len(pools) > 0 else None
+        _pool_dtype = str(pools[0].dtype).replace("torch.", "") if len(pools) > 0 else "n/a"
+        _pool_device = str(pools[0].device) if len(pools) > 0 else "n/a"
+        if imgs is None:
+            _imgs_info = "None (no new images — cache hit or over-complete)"
+        else:
+            _imgs_info = (f"Tensor shape={tuple(imgs.shape)}, "
+                          f"dtype={str(imgs.dtype).replace('torch.', '')}, "
+                          f"device={imgs.device}, "
+                          f"range=[{float(imgs.min()):.3f}, {float(imgs.max()):.3f}]")
+        if n_new == 0:
+            _scenario = "Full cache hit — rollout skipped"
+        elif n_new == len(prompts):
+            _scenario = "No cache — full rollout"
+        else:
+            _scenario = (f"Partial cache — {len(prompts) - n_new} cached + "
+                         f"{n_new} newly generated")
+
+        print(f"  ┌─ incremental_rollout_seedstd() returned ─────────────────────")
+        print(f"  │ pools          : list[T={len(pools)}] of Tensor{_pool_shape}  "
+              f"[{_pool_dtype}, {_pool_device}]")
+        print(f"  │ n_new          : {n_new}  (# newly rolled-out prompts)")
+        print(f"  │ imgs           : {_imgs_info}")
+        print(f"  │ prompt_offset  : {prompt_offset}  "
+              f"(new imgs start from img_{prompt_offset:04d}_YY.png)")
+        print(f"  │ scenario       : {_scenario}")
+        print(f"  └──────────────────────────────────────────────────────────────")
 
         # Save latent (update or initial save)
         os.makedirs(latents_dir, exist_ok=True)
@@ -1640,31 +1963,57 @@ def run_seedstd(sd, args, device):
         analyze_cross_seed_deviation(source_pools_dict, curve_base_latent_mag, args)
     print(f"[Done] cross-seed-deviation")
 
-    # ---- Tweedie Gap Computation ----
+    # ---- Tweedie Gap Computation (with CSV caching) ----
     print(f"\n[computing tweedie domain gap...]")
-    twd_curves = {}  # {(group, name): {"std": ..., "mean": ...}}
-    if sd is not None:
-        # Model available — get actual DDIM timesteps from scheduler
-        timesteps = list(sd.scheduler.timesteps)  # tensor scalars, length = NFE
-        for group, name, path in sources:
-            source_path = os.path.join(save_base, group, name)
-            latents_dir = os.path.join(source_path, "record", "latents")
-            latent_path = os.path.join(latents_dir, "latent.npz")
-            if os.path.exists(latent_path):
-                data = np.load(latent_path)
-                pools_arr = data["x_t"]  # (T, n*B, 4, 64, 64)
-                # Keep pools on CPU (as fp16) — cast to device/dtype inside function
-                pools = [torch.from_numpy(pools_arr[t]) for t in range(len(pools_arr))]
+    twd_curves = {}  # {(group, name): {"std": ..., "mean": ..., "raw_gaps": ...}}
+    T_target = args.NFE
+    timesteps = list(sd.scheduler.timesteps) if sd is not None else None
 
-                prompts = load_prompts(path, args.n_prompts)
-                # Compute tweedie gap
-                twd_metrics = compute_twd_gap_from_pools(sd, pools, prompts, seeds, args.cfg,
-                                                         timesteps, device,
-                                                         target_step_ratio=args.target_step_ratio)
-                twd_curves[(group, name)] = twd_metrics
-                print(f"  [{group}] {name}: tweedie gap computed")
+    for group, name, path in sources:
+        source_path = os.path.join(save_base, group, name)
+        latents_dir = os.path.join(source_path, "record", "latents")
+        latent_path = os.path.join(latents_dir, "latent.npz")
+        twd_gap_dir = os.path.join(source_path, "record", "twd_gap")
+        twd_gap_csv_path = os.path.join(twd_gap_dir, "twd_gap_raw.csv")
 
-        # Save tweedie gap curves (csv + plot)
+        prompts = load_prompts(path, args.n_prompts)
+        target_n = len(prompts)
+        B = args.batch
+
+        # 1) Try cached CSV first
+        cached_raw, cached_n = load_twd_gap_csv(twd_gap_csv_path, T_target, B)
+
+        if cached_raw is not None and cached_n >= target_n: # CSV가 있다
+            # Cache sufficient — no computation needed
+            print(f"  [{group}] {name}: ✓ CACHE HIT (n_cached={cached_n} >= target_n={target_n}) "
+                  f"— read CSV only")
+            raw_gaps = cached_raw[:, :target_n, :]  # (T, target_n, B)
+        elif sd is not None and os.path.exists(latent_path):
+            # Load pools and compute (full or incremental)
+            print(f"  [{group}] {name}: cache incomplete or missing — compute via Tweedie chain")
+            data = np.load(latent_path)
+            pools_arr = data["x_t"]  # (T, n*B, 4, 64, 64)
+            pools = [torch.from_numpy(pools_arr[t]) for t in range(len(pools_arr))]
+
+            raw_gaps, n_new = incremental_twd_gap_compute(
+                sd, pools, prompts, seeds, args.cfg, timesteps, device,
+                twd_gap_csv_path, target_step_ratio=args.target_step_ratio,
+                cached_raw=cached_raw, cached_n=cached_n)
+        else:
+            # No cache and no model — skip this source
+            print(f"  [{group}] {name}: ✗ SKIP (no cache and no model available)")
+            continue
+
+        # Derive std/mean curves from raw_gaps
+        twd_curves[(group, name)] = {
+            "std":       raw_gaps.std(axis=2).mean(axis=1),   # (T,)
+            "mean":      raw_gaps.mean(axis=2).mean(axis=1),  # (T,)
+            "raw_gaps":  raw_gaps,
+        }
+        print(f"  [{group}] {name}: tweedie gap ready (n={target_n}, B={B}, T={T_target})")
+
+    # Save curves (csv + plot) — from twd_curves derived above (cache or fresh)
+    if True:  # scope wrapper for the else branch below
         if twd_curves:
             csv_dir_twd = os.path.join(curve_base_twd_gap, "csv")
             plot_dir_twd = os.path.join(curve_base_twd_gap, "plot")
@@ -1736,9 +2085,30 @@ def run_seedstd(sd, args, device):
             source_gaps_dict = {k: m["raw_gaps"] for k, m in twd_curves.items()}
             analyze_cross_seed_twd_gap_deviation(source_gaps_dict, curve_base_twd_gap, args)
             print(f"[Done] cross-seed twd_gap deviation")
-    else:
-        print("  [skip] model not loaded (cache-only mode)")
+        else:
+            print("  [skip] no twd_gap data (cache missing and no model)")
     print(f"[Done] tweedie gap")
+
+    # ---- Per-prompt curves (latent_mag + twd_gap per seed) ----
+    print(f"\n[saving per-prompt curves...]")
+    for group, name, path in sources:
+        source_path = os.path.join(save_base, group, name)
+        latent_path = os.path.join(source_path, "record", "latents", "latent.npz")
+        if not os.path.exists(latent_path):
+            print(f"  [{group}] {name}: latent.npz not found, skip per-prompt")
+            continue
+        prompts_src = load_prompts(path, args.n_prompts)
+        n_src = len(prompts_src)
+        data = np.load(latent_path)
+        pools_arr = data["x_t"]            # (T, n*B, 4, 64, 64)
+        pools_src = [torch.from_numpy(pools_arr[t]) for t in range(len(pools_arr))]
+        raw_gaps_src = twd_curves.get((group, name), {}).get("raw_gaps", None)
+        if raw_gaps_src is not None:
+            raw_gaps_src = raw_gaps_src[:, :n_src, :]   # (T, n_src, B)
+        save_per_prompt_curves(pools_src, prompts_src, seeds, raw_gaps_src,
+                               group, name, save_base,
+                               curve_base_latent_mag, curve_base_twd_gap, args)
+    print(f"[Done] per-prompt curves")
 
     # print save info per source
     for group, name, path in sources:
@@ -1877,17 +2247,54 @@ def main():
     elif args.force_rollout and args.seedstd:
         print("[force-rollout] 캐시 무시 — 모든 소스 강제 rollout")
 
+    # ---- twd_gap CSV 캐시 감지: 각 source의 record/twd_gap/twd_gap_raw.csv 확인 ----
+    _seedstd_all_twd_cached = False
+    if args.seedstd and args.sources and not args.force_rollout:
+        _sampler = "ddim"
+        _cfg_tag = f"CFG={args.cfg}_NFE={args.NFE}"
+        _batch_tag = f"batch={args.batch}"
+        _seed_tag = f"seed={args.seed}"
+        _base_seed = os.path.join("workdir", "exp_main", "manifold", "latent_std",
+                                  _mt, _sampler, _cfg_tag, _batch_tag, _seed_tag, "save")
+        _seedstd_all_twd_cached = True
+        for g, n, _ in _parse_sources(args.sources):
+            twd_csv = os.path.join(_base_seed, g, n, "record", "twd_gap", "twd_gap_raw.csv")
+            if not os.path.exists(twd_csv):
+                _seedstd_all_twd_cached = False
+                break
+            # Check n_cached >= args.n_prompts
+            try:
+                with open(twd_csv, 'r') as f:
+                    reader = csv.reader(f)
+                    rows = list(reader)
+                if not rows:
+                    _seedstd_all_twd_cached = False
+                    break
+                n_data_rows = len(rows) - 1  # exclude header
+                n_cached_here = n_data_rows // args.batch
+                # T check
+                header_cols = len(rows[0]) - 2  # exclude prompt_idx, seed_idx
+                if header_cols != args.NFE or n_cached_here < args.n_prompts:
+                    _seedstd_all_twd_cached = False
+                    break
+            except Exception:
+                _seedstd_all_twd_cached = False
+                break
+
     if args.compare_all:
         print("[compare-all] load from save/ — skip model load (GPU 0GB)")
         sd = None
     elif args.manifold and _has_save:
         print("[save-load] all 3 latent.npz exist — skip model load (GPU 0GB)")
         sd = None  # only distance calc without model
+    elif args.seedstd and _seedstd_all_pools and _seedstd_all_twd_cached:
+        print(f"[pool-load] latent AND twd_gap CSV caches complete "
+              f"(n_prompts>={args.n_prompts}, batch={args.batch}) → skip model load (GPU 0GB)")
+        sd = None
     elif args.seedstd and _seedstd_all_pools:
-        print(f"[pool-load] all seedstd pools exist with correct shape "
+        print(f"[pool-load] latent pools complete but twd_gap CSV incomplete "
               f"(n_prompts={args.n_prompts}, batch={args.batch})")
         print(f"  → load model for tweedie gap computation")
-        # Note: Keep model loaded for twd_gap calculation (even though cache is complete)
         solver_config = munchify({"num_sampling": args.NFE})
         sd = StableDiffusion(solver_config=solver_config, model_key=args.model_key,
                              device=device, seed=args.seed)

@@ -26,7 +26,7 @@ NFE=50
 cfg_ddim=7.5
 seed=42
 num_samples=10
-num_images_per_prompt=1
+num_images_per_prompt=4
 b_size=${num_images_per_prompt}
 
 # ★ eval subset — 평가할 inference 이미지 수 NUM_EVAL(요청) → clamp 후 실제 평가 장수가

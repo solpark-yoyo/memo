@@ -500,3 +500,20 @@ energy 증가 원인이 Low 인지 High 인지 관찰 => 만약에 Low라면 추
 
 (기존 Memorization에서 Ours(Inference optimization)가 왜 Memorization을 해결했는지에 대한 이론적 기반이 있는가? 
 : Score를 만지면 Memo와 관련있다라는 잠정적 기반 말고 )
+
+# 260915: longtimenosee
+
+일단 지금 general prompt는 임의의 prompt에 따른 twd_gap이 상당히 작음. 사실상 twd_gap이 없다고 볼 수 있음.
+
+하지만 memorizatoin에서는 임의의 prompt에 따른 twd_gap의 차이가 있음. std가 상당히 큼
+
+twd_gap mean: memo가 tweedie gap이 이만큼이구나 
+twd_gap std: memo가 batch내 seed에 따라 이렇게 다를 수 있구나 (prompt 별 mean)
+
+
+
+지금 해야 될 것
+
+- denoising 될때도 twd_mean과 twd_std를 계산해서 plot 해보기
+- baseline 코드 이해 및 twd_gap 측정
+- 실험 통제하기(논문 repo 찾아서)

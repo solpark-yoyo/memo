@@ -1,3 +1,7 @@
+import sys, os
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..')))
+from twd_gap_tracker import TwdGapTracker
+
 import torch
 import torch.nn as nn
 from diffusers import StableDiffusionPipeline
@@ -293,7 +297,10 @@ class MemStableDiffusionPipeline(StableDiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         save_prefix="heatmap/test",
-        args = None,
+        args=None,
+        twd_gap_record_dir=None,
+        twd_gap_tag="ren_memattn",
+        twd_gap_base_s_ratio=0.5,
         **kwargs,
     ):
         r"""
@@ -488,6 +495,12 @@ class MemStableDiffusionPipeline(StableDiffusionPipeline):
         self._num_timesteps = len(timesteps)
         step_counter = 0
         attn_weight_list_numpy = []
+
+        # ---- twd_gap tracker setup ----
+        _twd_tracker = TwdGapTracker(self.unet, self.scheduler, prompt_embeds,
+                                      self.guidance_scale, latents.clone().detach(),
+                                      twd_gap_base_s_ratio) if twd_gap_record_dir is not None else None
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -598,6 +611,9 @@ class MemStableDiffusionPipeline(StableDiffusionPipeline):
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                     noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=self.guidance_rescale)
 
+                if _twd_tracker is not None:
+                    _twd_tracker.record(latents, noise_pred, t, i)
+
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
 
@@ -617,6 +633,9 @@ class MemStableDiffusionPipeline(StableDiffusionPipeline):
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
+
+        if _twd_tracker is not None:
+            _twd_tracker.save(twd_gap_record_dir, twd_gap_tag)
 
         # attn_weight_list_numpy
         if args.save_numpy:

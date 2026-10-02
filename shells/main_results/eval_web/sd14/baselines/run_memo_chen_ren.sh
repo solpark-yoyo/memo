@@ -25,7 +25,7 @@ SECONDS=0    # 스크립트 전체 총 소요 시간 측정 (종료 시 [Elapsed
 # =========================== 1. [Config] ===========================
 device="${DEVICE:-cuda:0}"            # 평가·shell 공용 장치 (예: DEVICE=cuda:3)
 seed=42
-num_samples=100
+num_samples=5
 # ren_inference.py — text2img.py에 num_images_per_prompt 지원 추가 (2026-08-30)
 # refactored UNet 주입 방식 계승 (stock UNet이면 return_attention kwarg 크래시)
 batch=4

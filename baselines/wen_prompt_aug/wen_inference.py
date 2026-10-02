@@ -79,10 +79,14 @@ def main():
 
     # ---- 프롬pt 배치 청킹 (batch_txt=1이면 크기 1 청크 = 기존 per-prompt 경로 그대로) ----
     nipp = args.num_images_per_prompt
+    # record 루트: output_dir(=gen_dir/result)의 부모/record/per_prompt/img_{pid:04d}/
+    _record_root = os.path.join(os.path.dirname(os.path.abspath(args.output_dir)), "record", "per_prompt")
     for bstart in range(0, len(prompts), max(args.batch_txt, 1)):
         chunk = prompts[bstart:bstart + max(args.batch_txt, 1)]
         # seed: 배치 첫 pid 기준 — probe와 생성이 같은 x_T를 공유하는 기존 성질 유지
         seed = args.gen_seed + bstart
+
+        twd_record_dir = os.path.join(_record_root, f"img_{bstart:04d}")
 
         if args.optim_target_loss is not None:
             if len(chunk) == 1:
@@ -117,6 +121,7 @@ def main():
                 num_inference_steps=args.num_inference_steps,
                 guidance_scale=args.guidance_scale,
                 num_images_per_prompt=nipp,
+                twd_gap_record_dir=twd_record_dir,
             )
         else:
             set_random_seed(seed)
@@ -125,6 +130,7 @@ def main():
                 num_inference_steps=args.num_inference_steps,
                 guidance_scale=args.guidance_scale,
                 num_images_per_prompt=nipp,
+                twd_gap_record_dir=twd_record_dir,
             )
 
         # ours 규격 저장 — pid는 전체 목록 기준 전역 인덱스 (bstart+j)

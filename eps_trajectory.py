@@ -154,7 +154,7 @@ class MemorizationAnalyzer(StableDiffusion):
         # --- initial noise ε ---
         zt = self.initialize_latent().to(self.dtype)   # match model dtype (fp16)
         epsilon_original = zt.clone().detach()          # x_s forward noise (실제 주입 noise)
-        epsilon_ref = torch.randn_like(zt)              # proxy reference (fresh random, x_T 와 독립)
+        epsilon_ref = epsilon_original                  # proxy reference (self-referential = x_T)
 
         # --- Fixed target step s (mid-noise level) ---
         #     Use the timestep at 50% of the schedule as the re-forward target
